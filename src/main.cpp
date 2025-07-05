@@ -52,9 +52,16 @@ float generateConsumption(bool isDayTime) {
 }
 
 void setup() {
+    // Initialize Serial with longer delay for ESP32-S3
     Serial.begin(115200);
-    delay(2000);
+    delay(3000); // Longer delay for ESP32-S3 USB CDC
     
+    // Ensure Serial is ready
+    while (!Serial && millis() < 5000) {
+        delay(10);
+    }
+    
+    Serial.println();
     Serial.println("🔌 ESP32 Game Board Simulator");
     Serial.println("==============================");
     Serial.println("Board: " + String(BOARD_NAME));
@@ -64,8 +71,8 @@ void setup() {
     Serial.println("ID: " + String(BOARD_ID));
     Serial.println("==============================");
     
-    // Initialize random seed
-    randomSeed(analogRead(0));
+    // Initialize random seed with ESP32 hardware RNG
+    randomSeed(esp_random());
     
     // Connect to WiFi
     Serial.println("📡 Connecting to WiFi: " + String(WIFI_SSID));

@@ -7,13 +7,13 @@
 // =================================
 
 // WiFi Configuration
-#define WIFI_SSID "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define WIFI_SSID "PotkaniNora"
+#define WIFI_PASSWORD "PrimaryPapikTarget"
 #define WIFI_TIMEOUT_MS 30000
 
 // Server Configuration  
-#define SERVER_URL "http://localhost"
-#define API_USERNAME "test_board"
+#define SERVER_URL "http://192.168.2.131"
+#define API_USERNAME "board1"
 #define API_PASSWORD "board123"
 
 // Board Configuration
@@ -22,7 +22,7 @@
 #define BOARD_TYPE BOARD_SOLAR  // BOARD_SOLAR, BOARD_WIND, BOARD_BATTERY, BOARD_GENERIC
 
 // Timing Configuration
-#define POLL_INTERVAL_MS 2000        // How often to poll server status
+#define POLL_INTERVAL_MS 500        // How often to poll server status
 #define DATA_SUBMIT_INTERVAL_MS 3000 // How often to submit data when expected
 #define RECONNECT_DELAY_MS 5000      // Delay before WiFi reconnection attempt
 
