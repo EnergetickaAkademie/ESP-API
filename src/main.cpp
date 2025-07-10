@@ -122,9 +122,13 @@ void setup() {
         Serial.println("📋 Registering board...");
         if (gameAPI.registerBoard()) {
             Serial.println("✅ Board registered successfully!");
-            if (ENABLE_DEBUG_PRINTS) {
-                gameAPI.printStatus();
-            }
+            
+            // Print initial building consumption table
+            Serial.println();
+            Serial.println("📊 Initial Building Consumption Table:");
+            gameAPI.printBuildingTable();
+            
+            Serial.println();
         } else {
             Serial.println("❌ Board registration failed!");
             return;
@@ -198,6 +202,17 @@ void loop() {
                         Serial.println("✅ Data submitted for round " + String(round) + 
                                      " - Gen: " + String(genPower, 1) + "W, Cons: " + String(consPower, 1) + "W");
                         lastDataSubmission = currentTime;
+                        
+                        // Demonstrate building table access
+                        const auto& buildingTable = gameAPI.getBuildingConsumptionTable();
+                        if (!buildingTable.empty()) {
+                            // Example: Get consumption for building type 1 (Residential)
+                            auto it = buildingTable.find(1);
+                            if (it != buildingTable.end()) {
+                                float residentialConsumption = it->second / 100.0; // Convert from centi-watts
+                                Serial.println("🏠 Residential building consumption: " + String(residentialConsumption, 1) + "W");
+                            }
+                        }
                     } else {
                         Serial.println("❌ Failed to submit data for round " + String(round));
                     }

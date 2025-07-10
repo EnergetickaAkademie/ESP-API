@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <map>
 
 // Protocol version
 #define PROTOCOL_VERSION 0x01
@@ -55,7 +56,22 @@ struct __attribute__((packed)) PollResponse {
     uint32_t score;
     int32_t generation;
     int32_t consumption;
+    uint64_t building_table_version;
     uint8_t flags;
+};
+
+// Building table entry structure
+struct __attribute__((packed)) BuildingTableEntry {
+    uint8_t building_type;
+    int32_t consumption;  // Power consumption in centi-watts (watts * 100)
+};
+
+// Building table download response structure
+struct __attribute__((packed)) BuildingTableHeader {
+    uint8_t version;
+    uint64_t table_version;
+    uint8_t entry_count;
+    // Followed by BuildingTableEntry[entry_count]
 };
 
 class ESPGameAPI {
@@ -71,6 +87,10 @@ private:
     bool isRegistered;
     uint16_t lastRound;
     
+    // Building consumption table management
+    std::map<uint8_t, int32_t> buildingConsumptionTable;
+    uint64_t localTableVersion;
+    
     HTTPClient http;
     
     // Network byte order conversion functions (renamed to avoid conflicts)
@@ -85,6 +105,10 @@ private:
     uint64_t getCurrentTimestamp();
     bool makeHttpRequest(const String& endpoint, const uint8_t* data, size_t dataSize, uint8_t* response, size_t& responseSize);
     bool makeHttpGetRequest(const String& endpoint, uint8_t* response, size_t& responseSize);
+    
+    // Building table helper functions
+    bool downloadBuildingTable();
+    bool parseBuildingTable(const uint8_t* data, size_t dataSize);
     
 public:
     // Constructor
@@ -102,6 +126,14 @@ public:
     bool submitPowerData(float generation, float consumption, uint8_t flags);
     bool pollStatus(uint64_t& timestamp, uint16_t& round, uint32_t& score, 
                    float& generation, float& consumption, uint8_t& statusFlags);
+    bool pollStatus(uint64_t& timestamp, uint16_t& round, uint32_t& score, 
+                   float& generation, float& consumption, uint8_t& statusFlags,
+                   uint64_t& buildingTableVersion);
+    
+    // Building consumption table management
+    const std::map<uint8_t, int32_t>& getBuildingConsumptionTable() const;
+    bool updateBuildingTableIfNeeded(uint64_t serverTableVersion);
+    uint64_t getLocalTableVersion() const { return localTableVersion; }
     
     // Utility functions
     bool isGameActive(uint8_t statusFlags) const;
@@ -114,6 +146,7 @@ public:
     
     // Debug functions
     void printStatus() const;
+    void printBuildingTable() const;
 };
 
 #endif // ESP_GAME_API_H

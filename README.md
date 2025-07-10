@@ -11,6 +11,7 @@ A PlatformIO library for ESP32 boards to communicate with the WebControl game se
 - 🔄 **Binary Protocol** - Optimized ~65% bandwidth savings vs JSON
 - 🛡️ **Error Handling** - Robust error detection and recovery
 - 📱 **Memory Efficient** - Uses fixed-size binary packets
+- 🏢 **Building Consumption Management** - Downloads and caches building power consumption tables
 
 ## Hardware Requirements
 
@@ -235,6 +236,13 @@ The example provides detailed logging:
 ⚡ Power data submitted - Gen: 45.2W, Cons: 28.7W
 ✅ Data submitted for round 1
 ```
+
+## Documentation
+
+- **[Quick Setup Guide](SETUP.md)** - Step-by-step setup instructions
+- **[Protocol Description](PROTOCOL_DESCRIPTION.md)** - Binary protocol documentation
+- **[Building Consumption Management](../BUILDING_CONSUMPTION_MANAGEMENT.md)** - Building power consumption table management
+- **[Project Overview](PROJECT_OVERVIEW.md)** - Detailed feature comparison and examples
 
 ## Contributing
 

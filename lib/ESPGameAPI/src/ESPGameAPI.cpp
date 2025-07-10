@@ -3,7 +3,16 @@
 // Constructor
 ESPGameAPI::ESPGameAPI(const String& serverUrl, uint32_t id, const String& name, BoardType type) 
     : baseUrl(serverUrl), boardId(id), boardName(name), boardType(type), 
-      isLoggedIn(false), isRegistered(false), lastRound(0) {
+      isLoggedIn(false), isRegistered(false), lastRound(0), localTableVersion(0) {
+    // Initialize with default building consumption values (in centi-watts)
+    buildingConsumptionTable[1] = 2500;   // Residential: 25.0W
+    buildingConsumptionTable[2] = 5000;   // Commercial: 50.0W
+    buildingConsumptionTable[3] = 7500;   // Industrial: 75.0W
+    buildingConsumptionTable[4] = 1500;   // Educational: 15.0W
+    buildingConsumptionTable[5] = 3000;   // Hospital: 30.0W
+    buildingConsumptionTable[6] = 1000;   // Public: 10.0W
+    buildingConsumptionTable[7] = 4000;   // Data Center: 40.0W
+    buildingConsumptionTable[8] = 2000;   // Agricultural: 20.0W
 }
 
 // Network byte order conversion functions (renamed to avoid conflicts)
@@ -234,18 +243,25 @@ bool ESPGameAPI::submitPowerData(float generation, float consumption, uint8_t fl
 // Poll board status
 bool ESPGameAPI::pollStatus(uint64_t& timestamp, uint16_t& round, uint32_t& score, 
                            float& generation, float& consumption, uint8_t& statusFlags) {
+    uint64_t buildingTableVersion;
+    return pollStatus(timestamp, round, score, generation, consumption, statusFlags, buildingTableVersion);
+}
+
+bool ESPGameAPI::pollStatus(uint64_t& timestamp, uint16_t& round, uint32_t& score, 
+                           float& generation, float& consumption, uint8_t& statusFlags,
+                           uint64_t& buildingTableVersion) {
     if (!isRegistered) {
         Serial.println("❌ Cannot poll: board not registered");
         return false;
     }
     
     String endpoint = "/coreapi/poll_binary/" + String(boardId);
-    uint8_t responseBuffer[24];
+    uint8_t responseBuffer[32];  // Updated to 32 bytes for new protocol
     size_t responseSize = 0;
     
     bool success = makeHttpGetRequest(endpoint, responseBuffer, responseSize);
     
-    if (success && responseSize >= 24) {
+    if (success && responseSize >= 32) {
         PollResponse* resp = (PollResponse*)responseBuffer;
         
         if (resp->version == PROTOCOL_VERSION) {
@@ -253,6 +269,7 @@ bool ESPGameAPI::pollStatus(uint64_t& timestamp, uint16_t& round, uint32_t& scor
             round = networkToHostShort(resp->round);
             score = networkToHostLong(resp->score);
             statusFlags = resp->flags;
+            buildingTableVersion = networkToHostLongLong(resp->building_table_version);
             
             // Convert power values from centi-watts to watts
             int32_t genRaw = networkToHostLong(resp->generation);
@@ -266,6 +283,16 @@ bool ESPGameAPI::pollStatus(uint64_t& timestamp, uint16_t& round, uint32_t& scor
                 lastRound = round;
                 String roundType = isRoundTypeDay(statusFlags) ? "day" : "night";
                 Serial.println("🔄 New round detected: " + String(round) + " (" + roundType + ")");
+            }
+            
+            // Check if building table needs updating
+            if (buildingTableVersion != localTableVersion) {
+                Serial.println("📊 Building table version mismatch, downloading new table...");
+                if (downloadBuildingTable()) {
+                    Serial.println("✅ Building table updated successfully");
+                } else {
+                    Serial.println("❌ Failed to update building table");
+                }
             }
             
             return true;
@@ -290,6 +317,7 @@ bool ESPGameAPI::isRoundTypeDay(uint8_t statusFlags) const {
 
 // Debug function
 void ESPGameAPI::printStatus() const {
+    Serial.println();
     Serial.println("=== ESP Game API Status ===");
     Serial.println("Board ID: " + String(boardId));
     Serial.println("Board Name: " + boardName);
@@ -298,5 +326,95 @@ void ESPGameAPI::printStatus() const {
     Serial.println("Registered: " + String(isRegistered ? "Yes" : "No"));
     Serial.println("Last Round: " + String(lastRound));
     Serial.println("WiFi Connected: " + String(WiFi.status() == WL_CONNECTED ? "Yes" : "No"));
+    Serial.println("Building Table Version: " + String((uint32_t)localTableVersion));
+    Serial.println("Building Table Entries: " + String(buildingConsumptionTable.size()));
     Serial.println("===========================");
+}
+
+// Building table management functions
+const std::map<uint8_t, int32_t>& ESPGameAPI::getBuildingConsumptionTable() const {
+    return buildingConsumptionTable;
+}
+
+bool ESPGameAPI::updateBuildingTableIfNeeded(uint64_t serverTableVersion) {
+    if (serverTableVersion != localTableVersion) {
+        return downloadBuildingTable();
+    }
+    return true; // Already up to date
+}
+
+bool ESPGameAPI::downloadBuildingTable() {
+    if (!isLoggedIn) {
+        Serial.println("❌ Cannot download building table: not logged in");
+        return false;
+    }
+    
+    String endpoint = "/coreapi/building_table_binary";
+    uint8_t responseBuffer[1300];  // Maximum size for building table (1285 bytes + margin)
+    size_t responseSize = 0;
+    
+    bool success = makeHttpGetRequest(endpoint, responseBuffer, responseSize);
+    
+    if (success && responseSize >= 10) {
+        return parseBuildingTable(responseBuffer, responseSize);
+    }
+    
+    Serial.println("❌ Failed to download building table");
+    return false;
+}
+
+bool ESPGameAPI::parseBuildingTable(const uint8_t* data, size_t dataSize) {
+    if (dataSize < 10) {
+        Serial.println("❌ Building table too short");
+        return false;
+    }
+    
+    // Parse header: version(1) + table_version(8) + entry_count(1)
+    uint8_t version = data[0];
+    if (version != PROTOCOL_VERSION) {
+        Serial.println("❌ Invalid building table protocol version");
+        return false;
+    }
+    
+    uint64_t tableVersion = networkToHostLongLong(*(uint64_t*)(data + 1));
+    uint8_t entryCount = data[9];
+    
+    // Validate expected size
+    size_t expectedSize = 10 + (entryCount * 5);  // Each entry is 5 bytes
+    if (dataSize != expectedSize) {
+        Serial.println("❌ Building table size mismatch");
+        return false;
+    }
+    
+    // Parse entries
+    std::map<uint8_t, int32_t> newTable;
+    size_t offset = 10;
+    
+    for (uint8_t i = 0; i < entryCount; i++) {
+        uint8_t buildingType = data[offset];
+        int32_t consumption = networkToHostLong(*(uint32_t*)(data + offset + 1));
+        
+        newTable[buildingType] = consumption;
+        offset += 5;
+    }
+    
+    // Update local table
+    buildingConsumptionTable = newTable;
+    localTableVersion = tableVersion;
+    
+    Serial.println("✅ Building table updated: " + String(entryCount) + " entries, version " + String((uint32_t)tableVersion));
+    return true;
+}
+
+void ESPGameAPI::printBuildingTable() const {
+    Serial.println();
+    Serial.println("=== Building Consumption Table ===");
+    Serial.println("Version: " + String((uint32_t)localTableVersion));
+    Serial.println("Entries: " + String(buildingConsumptionTable.size()));
+    
+    for (const auto& entry : buildingConsumptionTable) {
+        float watts = entry.second / 100.0;
+        Serial.println("  Type " + String(entry.first) + ": " + String(watts, 1) + "W");
+    }
+    Serial.println("=================================");
 }
