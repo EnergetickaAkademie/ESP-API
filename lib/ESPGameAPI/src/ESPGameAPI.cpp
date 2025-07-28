@@ -1,21 +1,14 @@
 #include "ESPGameAPI.h"
 
 // Constructor
-ESPGameAPI::ESPGameAPI(const String& serverUrl, uint32_t id, const String& name, BoardType type) 
-    : baseUrl(serverUrl), boardId(id), boardName(name), boardType(type), 
-      isLoggedIn(false), isRegistered(false), lastRound(0), localTableVersion(0) {
-    // Initialize with default building consumption values (in centi-watts)
-    buildingConsumptionTable[1] = 2500;   // Residential: 25.0W
-    buildingConsumptionTable[2] = 5000;   // Commercial: 50.0W
-    buildingConsumptionTable[3] = 7500;   // Industrial: 75.0W
-    buildingConsumptionTable[4] = 1500;   // Educational: 15.0W
-    buildingConsumptionTable[5] = 3000;   // Hospital: 30.0W
-    buildingConsumptionTable[6] = 1000;   // Public: 10.0W
-    buildingConsumptionTable[7] = 4000;   // Data Center: 40.0W
-    buildingConsumptionTable[8] = 2000;   // Agricultural: 20.0W
+ESPGameAPI::ESPGameAPI(const String& serverUrl, const String& name, BoardType type, 
+                       unsigned long updateIntervalMs, unsigned long pollIntervalMs) 
+    : baseUrl(serverUrl), boardName(name), boardType(type), 
+      isLoggedIn(false), isRegistered(false), lastUpdateTime(0), lastPollTime(0),
+      updateInterval(updateIntervalMs), pollInterval(pollIntervalMs), gameActive(false) {
 }
 
-// Network byte order conversion functions (renamed to avoid conflicts)
+// Network byte order conversion functions
 uint32_t ESPGameAPI::hostToNetworkLong(uint32_t hostlong) {
     return ((hostlong & 0xFF000000) >> 24) |
            ((hostlong & 0x00FF0000) >> 8)  |
@@ -50,14 +43,7 @@ String ESPGameAPI::boardTypeToString(BoardType type) const {
     }
 }
 
-// Get current Unix timestamp
-uint64_t ESPGameAPI::getCurrentTimestamp() {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (uint64_t)tv.tv_sec;
-}
-
-// Authentication
+// Authentication using JSON login endpoint
 bool ESPGameAPI::login(const String& user, const String& pass) {
     username = user;
     password = pass;
@@ -151,41 +137,41 @@ bool ESPGameAPI::makeHttpGetRequest(const String& endpoint, uint8_t* response, s
     }
 }
 
-// Register board with the game
+// Register board with the new binary protocol (empty body, board ID from JWT)
 bool ESPGameAPI::registerBoard() {
     if (!isLoggedIn) {
         Serial.println("❌ Cannot register: not logged in");
         return false;
     }
     
-    RegistrationRequest req;
-    req.board_id = hostToNetworkLong(boardId);
-    strncpy(req.board_name, boardName.c_str(), 31);
-    req.board_name[31] = '\0';
-    
-    String typeStr = boardTypeToString(boardType);
-    strncpy(req.board_type, typeStr.c_str(), 15);
-    req.board_type[15] = '\0';
-    
-    uint8_t responseBuffer[67];
+    uint8_t responseBuffer[100];
     size_t responseSize = 0;
     
-    bool success = makeHttpRequest("/coreapi/register_binary", (uint8_t*)&req, sizeof(req), responseBuffer, responseSize);
+    bool success = makeHttpRequest("/coreapi/register", nullptr, 0, responseBuffer, responseSize);
     
-    if (success && responseSize >= 3) {
-        RegistrationResponse* resp = (RegistrationResponse*)responseBuffer;
-        if (resp->version == PROTOCOL_VERSION && resp->success == 0x01) {
-            isRegistered = true;
-            Serial.println("📋 Successfully registered board: " + boardName);
-            return true;
-        } else {
-            // Print error message if available
-            if (resp->message_length > 0 && responseSize >= (3 + resp->message_length)) {
-                String errorMsg = String(resp->message).substring(0, resp->message_length);
-                Serial.println("❌ Registration failed: " + errorMsg);
+    if (success) {
+        if (responseSize >= 2) {
+            uint8_t successFlag = responseBuffer[0];
+            uint8_t messageLength = responseBuffer[1];
+            
+            if (successFlag == 0x01) {
+                isRegistered = true;
+                Serial.println("📋 Successfully registered board: " + boardName);
+                return true;
             } else {
-                Serial.println("❌ Registration failed: unknown error");
+                // Print error message if available
+                if (messageLength > 0 && responseSize >= (2 + messageLength)) {
+                    String errorMsg = "";
+                    for (int i = 0; i < messageLength && i < 64; i++) {
+                        errorMsg += (char)responseBuffer[2 + i];
+                    }
+                    Serial.println("❌ Registration failed: " + errorMsg);
+                } else {
+                    Serial.println("❌ Registration failed: unknown error");
+                }
             }
+        } else {
+            Serial.println("❌ Registration response too short");
         }
     } else {
         Serial.println("❌ Registration request failed");
@@ -194,227 +180,335 @@ bool ESPGameAPI::registerBoard() {
     return false;
 }
 
-// Submit power data
-bool ESPGameAPI::submitPowerData(float generation, float consumption) {
-    uint8_t flags = 0;
-    if (generation >= 0) flags |= FLAG_GENERATION_PRESENT;
-    if (consumption >= 0) flags |= FLAG_CONSUMPTION_PRESENT;
-    return submitPowerData(generation, consumption, flags);
-}
-
-bool ESPGameAPI::submitPowerData(float generation, float consumption, uint8_t flags) {
+// Submit power data using new binary protocol (8 bytes: production + consumption)
+bool ESPGameAPI::submitPowerData(float production, float consumption) {
     if (!isRegistered) {
         Serial.println("❌ Cannot submit data: board not registered");
         return false;
     }
     
     PowerDataRequest req;
-    req.board_id = hostToNetworkLong(boardId);
-    req.timestamp = hostToNetworkLongLong(getCurrentTimestamp());
+    // Convert watts to milliwatts as signed integers
+    req.production = hostToNetworkLong((int32_t)(production * 1000));
+    req.consumption = hostToNetworkLong((int32_t)(consumption * 1000));
     
-    // Convert watts to centi-watts (watts * 100) and handle null values
-    if (flags & FLAG_GENERATION_PRESENT && generation >= 0) {
-        req.generation = hostToNetworkLong((int32_t)(generation * 100));
-    } else {
-        req.generation = hostToNetworkLong(POWER_NULL_VALUE);
-    }
-    
-    if (flags & FLAG_CONSUMPTION_PRESENT && consumption >= 0) {
-        req.consumption = hostToNetworkLong((int32_t)(consumption * 100));
-    } else {
-        req.consumption = hostToNetworkLong(POWER_NULL_VALUE);
-    }
-    
-    req.flags = flags;
-    
-    uint8_t responseBuffer[100];
+    uint8_t responseBuffer[10];
     size_t responseSize = 0;
     
-    bool success = makeHttpRequest("/coreapi/power_data_binary", (uint8_t*)&req, sizeof(req), responseBuffer, responseSize);
+    bool success = makeHttpRequest("/coreapi/post_vals", (uint8_t*)&req, sizeof(req), responseBuffer, responseSize);
     
     if (success) {
-        Serial.println("⚡ Power data submitted - Gen: " + String(generation, 1) + "W, Cons: " + String(consumption, 1) + "W");
+        Serial.println("⚡ Power data submitted - Gen: " + String(production, 1) + "W, Cons: " + String(consumption, 1) + "W");
         return true;
     }
     
     return false;
 }
 
-// Poll board status
-bool ESPGameAPI::pollStatus(uint64_t& timestamp, uint16_t& round, uint32_t& score, 
-                           float& generation, float& consumption, uint8_t& statusFlags) {
-    uint64_t buildingTableVersion;
-    return pollStatus(timestamp, round, score, generation, consumption, statusFlags, buildingTableVersion);
-}
-
-bool ESPGameAPI::pollStatus(uint64_t& timestamp, uint16_t& round, uint32_t& score, 
-                           float& generation, float& consumption, uint8_t& statusFlags,
-                           uint64_t& buildingTableVersion) {
+// Poll coefficients using new binary protocol
+bool ESPGameAPI::pollCoefficients() {
     if (!isRegistered) {
         Serial.println("❌ Cannot poll: board not registered");
         return false;
     }
     
-    String endpoint = "/coreapi/poll_binary/" + String(boardId);
-    uint8_t responseBuffer[32];  // Updated to 32 bytes for new protocol
+    uint8_t responseBuffer[1000];  // Large buffer for coefficients
     size_t responseSize = 0;
     
-    bool success = makeHttpGetRequest(endpoint, responseBuffer, responseSize);
+    bool success = makeHttpGetRequest("/coreapi/poll_binary", responseBuffer, responseSize);
     
-    if (success && responseSize >= 32) {
-        PollResponse* resp = (PollResponse*)responseBuffer;
+    if (success && responseSize >= 2) {
+        // Parse production coefficients
+        uint8_t prodCount = responseBuffer[0];
+        size_t offset = 1;
         
-        if (resp->version == PROTOCOL_VERSION) {
-            timestamp = networkToHostLongLong(resp->timestamp);
-            round = networkToHostShort(resp->round);
-            score = networkToHostLong(resp->score);
-            statusFlags = resp->flags;
-            buildingTableVersion = networkToHostLongLong(resp->building_table_version);
-            
-            // Convert power values from centi-watts to watts
-            int32_t genRaw = networkToHostLong(resp->generation);
-            int32_t consRaw = networkToHostLong(resp->consumption);
-            
-            generation = (genRaw == POWER_NULL_VALUE) ? -1.0 : (float)genRaw / 100.0;
-            consumption = (consRaw == POWER_NULL_VALUE) ? -1.0 : (float)consRaw / 100.0;
-            
-            // Update last round if this is a new round
-            if (round > lastRound) {
-                lastRound = round;
-                String roundType = isRoundTypeDay(statusFlags) ? "day" : "night";
-                Serial.println("🔄 New round detected: " + String(round) + " (" + roundType + ")");
-            }
-            
-            // Check if building table needs updating
-            if (buildingTableVersion != localTableVersion) {
-                Serial.println("📊 Building table version mismatch, downloading new table...");
-                if (downloadBuildingTable()) {
-                    Serial.println("✅ Building table updated successfully");
-                } else {
-                    Serial.println("❌ Failed to update building table");
-                }
-            }
-            
-            return true;
+        if (responseSize < (offset + prodCount * 5 + 1)) {
+            Serial.println("❌ Invalid coefficient response size");
+            return false;
         }
+        
+        productionCoefficients.clear();
+        for (uint8_t i = 0; i < prodCount; i++) {
+            ProductionCoefficient coeff;
+            coeff.source_id = responseBuffer[offset];
+            int32_t coeffRaw = networkToHostLong(*(uint32_t*)(responseBuffer + offset + 1));
+            coeff.coefficient = (float)coeffRaw / 1000.0;  // Convert mW to W
+            productionCoefficients.push_back(coeff);
+            offset += 5;
+        }
+        
+        // Parse consumption coefficients
+        uint8_t consCount = responseBuffer[offset];
+        offset++;
+        
+        if (responseSize < (offset + consCount * 5)) {
+            Serial.println("❌ Invalid consumption coefficient response size");
+            return false;
+        }
+        
+        consumptionCoefficients.clear();
+        for (uint8_t i = 0; i < consCount; i++) {
+            ConsumptionCoefficient coeff;
+            coeff.building_id = responseBuffer[offset];
+            int32_t consRaw = networkToHostLong(*(uint32_t*)(responseBuffer + offset + 1));
+            coeff.consumption = (float)consRaw / 1000.0;  // Convert mW to W
+            consumptionCoefficients.push_back(coeff);
+            offset += 5;
+        }
+        
+        gameActive = true;  // If we get coefficients, game is active
+        Serial.println("📊 Received " + String(prodCount) + " production and " + String(consCount) + " consumption coefficients");
+        return true;
+    } else if (success && responseSize == 0) {
+        // Empty response means game is not active
+        gameActive = false;
+        productionCoefficients.clear();
+        consumptionCoefficients.clear();
+        return true;
     }
     
     return false;
 }
 
-// Status flag helpers
-bool ESPGameAPI::isGameActive(uint8_t statusFlags) const {
-    return (statusFlags & 0x02) != 0; // Bit 1
+// Get production values (separate endpoint)
+bool ESPGameAPI::getProductionValues() {
+    if (!isRegistered) {
+        Serial.println("❌ Cannot get production values: board not registered");
+        return false;
+    }
+    
+    uint8_t responseBuffer[500];
+    size_t responseSize = 0;
+    
+    bool success = makeHttpGetRequest("/coreapi/prod_vals", responseBuffer, responseSize);
+    
+    if (success && responseSize >= 1) {
+        return parseProductionCoefficients(responseBuffer, responseSize);
+    }
+    
+    return false;
 }
 
-bool ESPGameAPI::isExpectingData(uint8_t statusFlags) const {
-    return (statusFlags & 0x04) != 0; // Bit 2
+// Get consumption values (separate endpoint)
+bool ESPGameAPI::getConsumptionValues() {
+    if (!isRegistered) {
+        Serial.println("❌ Cannot get consumption values: board not registered");
+        return false;
+    }
+    
+    uint8_t responseBuffer[500];
+    size_t responseSize = 0;
+    
+    bool success = makeHttpGetRequest("/coreapi/cons_vals", responseBuffer, responseSize);
+    
+    if (success && responseSize >= 1) {
+        return parseConsumptionCoefficients(responseBuffer, responseSize);
+    }
+    
+    return false;
 }
 
-bool ESPGameAPI::isRoundTypeDay(uint8_t statusFlags) const {
-    return (statusFlags & 0x01) != 0; // Bit 0: 0=night, 1=day
+// Report connected power plants
+bool ESPGameAPI::reportConnectedPowerPlants(const std::vector<ConnectedPowerPlant>& plants) {
+    if (!isRegistered) {
+        Serial.println("❌ Cannot report power plants: board not registered");
+        return false;
+    }
+    
+    size_t dataSize = 1 + plants.size() * 8;  // count + (id+power)*count
+    uint8_t* data = new uint8_t[dataSize];
+    
+    data[0] = (uint8_t)plants.size();
+    size_t offset = 1;
+    
+    for (const auto& plant : plants) {
+        *(uint32_t*)(data + offset) = hostToNetworkLong(plant.plant_id);
+        *(int32_t*)(data + offset + 4) = hostToNetworkLong((int32_t)(plant.set_power * 1000));  // Convert W to mW
+        offset += 8;
+    }
+    
+    uint8_t responseBuffer[10];
+    size_t responseSize = 0;
+    
+    bool success = makeHttpRequest("/coreapi/prod_connected", data, dataSize, responseBuffer, responseSize);
+    delete[] data;
+    
+    if (success) {
+        Serial.println("🔌 Reported " + String(plants.size()) + " connected power plants");
+        return true;
+    }
+    
+    return false;
+}
+
+// Report connected consumers
+bool ESPGameAPI::reportConnectedConsumers(const std::vector<ConnectedConsumer>& consumers) {
+    if (!isRegistered) {
+        Serial.println("❌ Cannot report consumers: board not registered");
+        return false;
+    }
+    
+    size_t dataSize = 1 + consumers.size() * 4;  // count + id*count
+    uint8_t* data = new uint8_t[dataSize];
+    
+    data[0] = (uint8_t)consumers.size();
+    size_t offset = 1;
+    
+    for (const auto& consumer : consumers) {
+        *(uint32_t*)(data + offset) = hostToNetworkLong(consumer.consumer_id);
+        offset += 4;
+    }
+    
+    uint8_t responseBuffer[10];
+    size_t responseSize = 0;
+    
+    bool success = makeHttpRequest("/coreapi/cons_connected", data, dataSize, responseBuffer, responseSize);
+    delete[] data;
+    
+    if (success) {
+        Serial.println("🏠 Reported " + String(consumers.size()) + " connected consumers");
+        return true;
+    }
+    
+    return false;
+}
+
+// Main update function - call this in Arduino loop()
+bool ESPGameAPI::update() {
+    if (!isConnected()) {
+        return false;
+    }
+    
+    unsigned long currentTime = millis();
+    bool updated = false;
+    
+    // Poll coefficients at poll interval
+    if (currentTime - lastPollTime >= pollInterval) {
+        lastPollTime = currentTime;
+        if (pollCoefficients()) {
+            updated = true;
+        }
+    }
+    
+    // Submit data at update interval if game is active and callbacks are set
+    if (gameActive && (currentTime - lastUpdateTime >= updateInterval)) {
+        lastUpdateTime = currentTime;
+        
+        // Report connected devices if callbacks are set
+        if (powerPlantsCallback) {
+            std::vector<ConnectedPowerPlant> plants = powerPlantsCallback();
+            reportConnectedPowerPlants(plants);
+        }
+        
+        if (consumersCallback) {
+            std::vector<ConnectedConsumer> consumers = consumersCallback();
+            reportConnectedConsumers(consumers);
+        }
+        
+        // Submit power data if callbacks are set
+        if (productionCallback && consumptionCallback) {
+            float production = productionCallback();
+            float consumption = consumptionCallback();
+            if (submitPowerData(production, consumption)) {
+                updated = true;
+            }
+        }
+    }
+    
+    return updated;
+}
+
+// Helper function to parse production coefficients from binary data
+bool ESPGameAPI::parseProductionCoefficients(const uint8_t* data, size_t dataSize) {
+    if (dataSize < 1) return false;
+    
+    uint8_t count = data[0];
+    size_t expectedSize = 1 + count * 5;
+    
+    if (dataSize != expectedSize) {
+        Serial.println("❌ Invalid production coefficients size");
+        return false;
+    }
+    
+    productionCoefficients.clear();
+    size_t offset = 1;
+    
+    for (uint8_t i = 0; i < count; i++) {
+        ProductionCoefficient coeff;
+        coeff.source_id = data[offset];
+        int32_t coeffRaw = networkToHostLong(*(uint32_t*)(data + offset + 1));
+        coeff.coefficient = (float)coeffRaw / 1000.0;  // Convert mW to W
+        productionCoefficients.push_back(coeff);
+        offset += 5;
+    }
+    
+    Serial.println("� Parsed " + String(count) + " production coefficients");
+    return true;
+}
+
+// Helper function to parse consumption coefficients from binary data
+bool ESPGameAPI::parseConsumptionCoefficients(const uint8_t* data, size_t dataSize) {
+    if (dataSize < 1) return false;
+    
+    uint8_t count = data[0];
+    size_t expectedSize = 1 + count * 5;
+    
+    if (dataSize != expectedSize) {
+        Serial.println("❌ Invalid consumption coefficients size");
+        return false;
+    }
+    
+    consumptionCoefficients.clear();
+    size_t offset = 1;
+    
+    for (uint8_t i = 0; i < count; i++) {
+        ConsumptionCoefficient coeff;
+        coeff.building_id = data[offset];
+        int32_t consRaw = networkToHostLong(*(uint32_t*)(data + offset + 1));
+        coeff.consumption = (float)consRaw / 1000.0;  // Convert mW to W
+        consumptionCoefficients.push_back(coeff);
+        offset += 5;
+    }
+    
+    Serial.println("🏠 Parsed " + String(count) + " consumption coefficients");
+    return true;
 }
 
 // Debug function
 void ESPGameAPI::printStatus() const {
     Serial.println();
     Serial.println("=== ESP Game API Status ===");
-    Serial.println("Board ID: " + String(boardId));
     Serial.println("Board Name: " + boardName);
     Serial.println("Board Type: " + boardTypeToString(boardType));
     Serial.println("Logged In: " + String(isLoggedIn ? "Yes" : "No"));
     Serial.println("Registered: " + String(isRegistered ? "Yes" : "No"));
-    Serial.println("Last Round: " + String(lastRound));
+    Serial.println("Game Active: " + String(gameActive ? "Yes" : "No"));
     Serial.println("WiFi Connected: " + String(WiFi.status() == WL_CONNECTED ? "Yes" : "No"));
-    Serial.println("Building Table Version: " + String((uint32_t)localTableVersion));
-    Serial.println("Building Table Entries: " + String(buildingConsumptionTable.size()));
+    Serial.println("Update Interval: " + String(updateInterval) + "ms");
+    Serial.println("Poll Interval: " + String(pollInterval) + "ms");
+    Serial.println("Production Coefficients: " + String(productionCoefficients.size()));
+    Serial.println("Consumption Coefficients: " + String(consumptionCoefficients.size()));
+    Serial.println("Callbacks Set:");
+    Serial.println("  Production: " + String(productionCallback ? "Yes" : "No"));
+    Serial.println("  Consumption: " + String(consumptionCallback ? "Yes" : "No"));
+    Serial.println("  Power Plants: " + String(powerPlantsCallback ? "Yes" : "No"));
+    Serial.println("  Consumers: " + String(consumersCallback ? "Yes" : "No"));
     Serial.println("===========================");
 }
 
-// Building table management functions
-const std::map<uint8_t, int32_t>& ESPGameAPI::getBuildingConsumptionTable() const {
-    return buildingConsumptionTable;
-}
-
-bool ESPGameAPI::updateBuildingTableIfNeeded(uint64_t serverTableVersion) {
-    if (serverTableVersion != localTableVersion) {
-        return downloadBuildingTable();
-    }
-    return true; // Already up to date
-}
-
-bool ESPGameAPI::downloadBuildingTable() {
-    if (!isLoggedIn) {
-        Serial.println("❌ Cannot download building table: not logged in");
-        return false;
-    }
-    
-    String endpoint = "/coreapi/building_table_binary";
-    uint8_t responseBuffer[1300];  // Maximum size for building table (1285 bytes + margin)
-    size_t responseSize = 0;
-    
-    bool success = makeHttpGetRequest(endpoint, responseBuffer, responseSize);
-    
-    if (success && responseSize >= 10) {
-        return parseBuildingTable(responseBuffer, responseSize);
-    }
-    
-    Serial.println("❌ Failed to download building table");
-    return false;
-}
-
-bool ESPGameAPI::parseBuildingTable(const uint8_t* data, size_t dataSize) {
-    if (dataSize < 10) {
-        Serial.println("❌ Building table too short");
-        return false;
-    }
-    
-    // Parse header: version(1) + table_version(8) + entry_count(1)
-    uint8_t version = data[0];
-    if (version != PROTOCOL_VERSION) {
-        Serial.println("❌ Invalid building table protocol version");
-        return false;
-    }
-    
-    uint64_t tableVersion = networkToHostLongLong(*(uint64_t*)(data + 1));
-    uint8_t entryCount = data[9];
-    
-    // Validate expected size
-    size_t expectedSize = 10 + (entryCount * 5);  // Each entry is 5 bytes
-    if (dataSize != expectedSize) {
-        Serial.println("❌ Building table size mismatch");
-        return false;
-    }
-    
-    // Parse entries
-    std::map<uint8_t, int32_t> newTable;
-    size_t offset = 10;
-    
-    for (uint8_t i = 0; i < entryCount; i++) {
-        uint8_t buildingType = data[offset];
-        int32_t consumption = networkToHostLong(*(uint32_t*)(data + offset + 1));
-        
-        newTable[buildingType] = consumption;
-        offset += 5;
-    }
-    
-    // Update local table
-    buildingConsumptionTable = newTable;
-    localTableVersion = tableVersion;
-    
-    Serial.println("✅ Building table updated: " + String(entryCount) + " entries, version " + String((uint32_t)tableVersion));
-    return true;
-}
-
-void ESPGameAPI::printBuildingTable() const {
+void ESPGameAPI::printCoefficients() const {
     Serial.println();
-    Serial.println("=== Building Consumption Table ===");
-    Serial.println("Version: " + String((uint32_t)localTableVersion));
-    Serial.println("Entries: " + String(buildingConsumptionTable.size()));
+    Serial.println("=== Game Coefficients ===");
     
-    for (const auto& entry : buildingConsumptionTable) {
-        float watts = entry.second / 100.0;
-        Serial.println("  Type " + String(entry.first) + ": " + String(watts, 1) + "W");
+    Serial.println("Production Coefficients (" + String(productionCoefficients.size()) + "):");
+    for (const auto& coeff : productionCoefficients) {
+        Serial.println("  Source " + String(coeff.source_id) + ": " + String(coeff.coefficient, 3) + "W");
     }
-    Serial.println("=================================");
+    
+    Serial.println("Consumption Coefficients (" + String(consumptionCoefficients.size()) + "):");
+    for (const auto& coeff : consumptionCoefficients) {
+        Serial.println("  Building " + String(coeff.building_id) + ": " + String(coeff.consumption, 3) + "W");
+    }
+    
+    Serial.println("========================");
 }

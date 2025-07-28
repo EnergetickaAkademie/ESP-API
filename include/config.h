@@ -16,15 +16,15 @@
 #define API_USERNAME "board1"
 #define API_PASSWORD "board123"
 
-// Board Configuration
-#define BOARD_ID 3001
+// Board Configuration (BOARD_ID removed - now extracted from JWT token)
 #define BOARD_NAME "ESP32-S3-DevKitC-1"
 #define BOARD_TYPE BOARD_SOLAR  // BOARD_SOLAR, BOARD_WIND, BOARD_BATTERY, BOARD_GENERIC
 
 // Timing Configuration
-#define POLL_INTERVAL_MS 500        // How often to poll server status
+#define POLL_INTERVAL_MS 5000        // How often to poll server status (increased)
 #define DATA_SUBMIT_INTERVAL_MS 3000 // How often to submit data when expected
 #define RECONNECT_DELAY_MS 5000      // Delay before WiFi reconnection attempt
+#define STATUS_PRINT_INTERVAL_MS 15000 // How often to print status updates
 
 // Power Generation Configuration
 #define SOLAR_BASE_POWER 45.0        // Base solar power in watts
