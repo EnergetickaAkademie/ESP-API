@@ -130,14 +130,11 @@ public:
     ESPGameAPI(const String& serverUrl, const String& name, BoardType type, 
                unsigned long updateIntervalMs = 3000, unsigned long pollIntervalMs = 5000);
     
-    // Authentication
+    // Authentication and registration (separate steps)
     bool login(const String& user, const String& pass);
-    
-    // Board management
     bool registerBoard();
     bool isGameRegistered() const { return isRegistered; }
     bool isFullyConnected() const { return isConnected(); }  // Alias for clarity
-    bool needsRegistration() const { return isLoggedIn && !isRegistered; }
     
     // Callback registration
     void setProductionCallback(PowerCallback callback) { productionCallback = callback; }

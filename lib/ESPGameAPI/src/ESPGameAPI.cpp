@@ -43,12 +43,17 @@ String ESPGameAPI::boardTypeToString(BoardType type) const {
     }
 }
 
-// Board authentication using JSON login endpoint (to get token for binary endpoints)
+// Authentication using JSON login endpoint
 bool ESPGameAPI::login(const String& user, const String& pass) {
     username = user;
     password = pass;
     
-    http.begin(baseUrl + "/coreapi/login");
+    // Construct the full URL
+    String loginUrl = baseUrl + "/coreapi/login";
+    Serial.println("🔐 Attempting login to: " + loginUrl);
+    Serial.println("👤 Username: " + username);
+    
+    http.begin(loginUrl);
     http.addHeader("Content-Type", "application/json");
     
     JsonDocument doc;
@@ -57,27 +62,43 @@ bool ESPGameAPI::login(const String& user, const String& pass) {
     
     String jsonString;
     serializeJson(doc, jsonString);
+    Serial.println("📤 Sending JSON: " + jsonString);
     
     int httpCode = http.POST(jsonString);
+    String response = http.getString();
+    
+    Serial.println("📥 HTTP Response Code: " + String(httpCode));
+    Serial.println("📥 Response Body: " + response);
     
     if (httpCode == 200) {
-        String response = http.getString();
         JsonDocument responseDoc;
         
         if (deserializeJson(responseDoc, response) == DeserializationError::Ok) {
             if (responseDoc["token"].is<String>()) {
                 token = responseDoc["token"].as<String>();
                 isLoggedIn = true;
-                isRegistered = false; // Reset registration status - need to register again
-                Serial.println("� Successfully authenticated board");
-                Serial.println("📋 Call registerBoard() next to enable binary communication");
+                Serial.println("🔐 Successfully logged in");
+                Serial.println("🎫 Token: " + token.substring(0, 20) + "...");
                 http.end();
                 return true;
+            } else {
+                Serial.println("❌ Token not found in response");
             }
+        } else {
+            Serial.println("❌ Failed to parse JSON response");
         }
+    } else if (httpCode == 401) {
+        Serial.println("❌ Invalid credentials (401)");
+    } else if (httpCode == 404) {
+        Serial.println("❌ Login endpoint not found (404) - Check server URL");
+    } else if (httpCode == 400) {
+        Serial.println("❌ Bad request (400) - Check JSON format");
+    } else if (httpCode <= 0) {
+        Serial.println("❌ Connection failed - Check network and server");
+    } else {
+        Serial.println("❌ Login failed with HTTP code: " + String(httpCode));
     }
     
-    Serial.println("❌ Board authentication failed: " + String(httpCode));
     http.end();
     return false;
 }
@@ -89,16 +110,17 @@ bool ESPGameAPI::makeHttpRequest(const String& endpoint, const uint8_t* data, si
         return false;
     }
     
-    if (!isRegistered) {
-        Serial.println("❌ Board not registered for binary communication");
-        return false;
-    }
+    String fullUrl = baseUrl + endpoint;
+    Serial.println("📤 Making request to: " + fullUrl);
+    Serial.println("📦 Data size: " + String(dataSize) + " bytes");
     
-    http.begin(baseUrl + endpoint);
+    http.begin(fullUrl);
     http.addHeader("Authorization", "Bearer " + token);
     http.addHeader("Content-Type", "application/octet-stream");
     
     int httpCode = http.POST((uint8_t*)data, dataSize);
+    
+    Serial.println("📥 HTTP Response Code: " + String(httpCode));
     
     if (httpCode == 200) {
         WiFiClient* stream = http.getStreamPtr();
@@ -106,12 +128,13 @@ bool ESPGameAPI::makeHttpRequest(const String& endpoint, const uint8_t* data, si
         if (responseSize > 0 && response) {
             stream->readBytes(response, responseSize);
         }
+        Serial.println("✅ Request successful, response size: " + String(responseSize));
         http.end();
         return true;
     } else {
-        Serial.println("❌ HTTP request failed: " + String(httpCode));
         String errorResponse = http.getString();
-        Serial.println("Error: " + errorResponse);
+        Serial.println("❌ HTTP request failed: " + String(httpCode));
+        Serial.println("📄 Error response: " + errorResponse);
         http.end();
         return false;
     }
@@ -124,15 +147,15 @@ bool ESPGameAPI::makeHttpGetRequest(const String& endpoint, uint8_t* response, s
         return false;
     }
     
-    if (!isRegistered) {
-        Serial.println("❌ Board not registered for binary communication");
-        return false;
-    }
+    String fullUrl = baseUrl + endpoint;
+    Serial.println("📤 Making GET request to: " + fullUrl);
     
-    http.begin(baseUrl + endpoint);
+    http.begin(fullUrl);
     http.addHeader("Authorization", "Bearer " + token);
     
     int httpCode = http.GET();
+    
+    Serial.println("📥 HTTP Response Code: " + String(httpCode));
     
     if (httpCode == 200) {
         WiFiClient* stream = http.getStreamPtr();
@@ -140,36 +163,46 @@ bool ESPGameAPI::makeHttpGetRequest(const String& endpoint, uint8_t* response, s
         if (responseSize > 0 && response) {
             stream->readBytes(response, responseSize);
         }
+        Serial.println("✅ GET request successful, response size: " + String(responseSize));
         http.end();
         return true;
     } else {
+        String errorResponse = http.getString();
         Serial.println("❌ HTTP GET failed: " + String(httpCode));
+        Serial.println("📄 Error response: " + errorResponse);
         http.end();
         return false;
     }
 }
 
-// Register board with the binary protocol - must be called after login
+// Register board with the new binary protocol (empty body, board ID from JWT)
 bool ESPGameAPI::registerBoard() {
     if (!isLoggedIn) {
-        Serial.println("❌ Cannot register: board not authenticated. Call login() first.");
+        Serial.println("❌ Cannot register: not logged in");
         return false;
     }
+    
+    Serial.println("📋 Attempting board registration...");
+    Serial.println("🎫 Using token: " + token.substring(0, 20) + "...");
     
     uint8_t responseBuffer[100];
     size_t responseSize = 0;
     
-    // The /register endpoint expects empty binary data since board ID comes from JWT
     bool success = makeHttpRequest("/coreapi/register", nullptr, 0, responseBuffer, responseSize);
+    
+    Serial.println("📥 Registration response size: " + String(responseSize));
     
     if (success) {
         if (responseSize >= 2) {
             uint8_t successFlag = responseBuffer[0];
             uint8_t messageLength = responseBuffer[1];
             
+            Serial.println("🚩 Success flag: " + String(successFlag));
+            Serial.println("📏 Message length: " + String(messageLength));
+            
             if (successFlag == 0x01) {
                 isRegistered = true;
-                Serial.println("📋 Successfully registered board for binary communication: " + boardName);
+                Serial.println("📋 Successfully registered board: " + boardName);
                 return true;
             } else {
                 // Print error message if available
@@ -178,16 +211,16 @@ bool ESPGameAPI::registerBoard() {
                     for (int i = 0; i < messageLength && i < 64; i++) {
                         errorMsg += (char)responseBuffer[2 + i];
                     }
-                    Serial.println("❌ Board registration failed: " + errorMsg);
+                    Serial.println("❌ Registration failed: " + errorMsg);
                 } else {
-                    Serial.println("❌ Board registration failed: unknown error");
+                    Serial.println("❌ Registration failed: unknown error");
                 }
             }
         } else {
             Serial.println("❌ Registration response too short");
         }
     } else {
-        Serial.println("❌ Registration request failed - check network and authentication");
+        Serial.println("❌ Registration request failed");
     }
     
     return false;
@@ -388,15 +421,6 @@ bool ESPGameAPI::reportConnectedConsumers(const std::vector<ConnectedConsumer>& 
 
 // Main update function - call this in Arduino loop()
 bool ESPGameAPI::update() {
-    // Check if we need to register the board first
-    if (isLoggedIn && !isRegistered) {
-        Serial.println("🔄 Board logged in but not registered. Attempting registration...");
-        if (!registerBoard()) {
-            Serial.println("❌ Failed to register board. Will retry next update.");
-            return false;
-        }
-    }
-    
     if (!isConnected()) {
         return false;
     }
@@ -502,12 +526,10 @@ void ESPGameAPI::printStatus() const {
     Serial.println("=== ESP Game API Status ===");
     Serial.println("Board Name: " + boardName);
     Serial.println("Board Type: " + boardTypeToString(boardType));
-    Serial.println("Base URL: " + baseUrl);
-    Serial.println("WiFi Connected: " + String(WiFi.status() == WL_CONNECTED ? "Yes" : "No"));
-    Serial.println("Authenticated: " + String(isLoggedIn ? "Yes" : "No"));
+    Serial.println("Logged In: " + String(isLoggedIn ? "Yes" : "No"));
     Serial.println("Registered: " + String(isRegistered ? "Yes" : "No"));
-    Serial.println("Fully Ready: " + String(isConnected() ? "Yes" : "No"));
     Serial.println("Game Active: " + String(gameActive ? "Yes" : "No"));
+    Serial.println("WiFi Connected: " + String(WiFi.status() == WL_CONNECTED ? "Yes" : "No"));
     Serial.println("Update Interval: " + String(updateInterval) + "ms");
     Serial.println("Poll Interval: " + String(pollInterval) + "ms");
     Serial.println("Production Coefficients: " + String(productionCoefficients.size()));
@@ -517,12 +539,6 @@ void ESPGameAPI::printStatus() const {
     Serial.println("  Consumption: " + String(consumptionCallback ? "Yes" : "No"));
     Serial.println("  Power Plants: " + String(powerPlantsCallback ? "Yes" : "No"));
     Serial.println("  Consumers: " + String(consumersCallback ? "Yes" : "No"));
-    
-    if (isLoggedIn && !isRegistered) {
-        Serial.println("⚠️  WARNING: Board is authenticated but not registered for binary communication!");
-        Serial.println("   Call registerBoard() or ensure update() is called regularly.");
-    }
-    
     Serial.println("===========================");
 }
 
