@@ -136,6 +136,8 @@ public:
     // Board management
     bool registerBoard();
     bool isGameRegistered() const { return isRegistered; }
+    bool isFullyConnected() const { return isConnected(); }  // Alias for clarity
+    bool needsRegistration() const { return isLoggedIn && !isRegistered; }
     
     // Callback registration
     void setProductionCallback(PowerCallback callback) { productionCallback = callback; }
@@ -164,7 +166,7 @@ public:
     void setPollInterval(unsigned long intervalMs) { pollInterval = intervalMs; }
     
     // Network status
-    bool isConnected() const { return WiFi.status() == WL_CONNECTED && isLoggedIn; }
+    bool isConnected() const { return WiFi.status() == WL_CONNECTED && isLoggedIn && isRegistered; }
     
     // Debug functions
     void printStatus() const;
