@@ -2,10 +2,14 @@
 
 // Constructor
 ESPGameAPI::ESPGameAPI(const String& serverUrl, const String& name, BoardType type, 
-                       unsigned long updateIntervalMs, unsigned long pollIntervalMs) 
+                       unsigned long updateIntervalMs, unsigned long pollIntervalMs,
+                       unsigned long requestTimeoutMs) 
     : baseUrl(serverUrl), boardName(name), boardType(type), 
       isLoggedIn(false), isRegistered(false), lastUpdateTime(0), lastPollTime(0),
-      updateInterval(updateIntervalMs), pollInterval(pollIntervalMs), gameActive(false) {
+      updateInterval(updateIntervalMs), pollInterval(pollIntervalMs), gameActive(false),
+      currentRequestState(REQ_IDLE), currentRequestType(REQ_NONE), requestStartTime(0),
+      requestTimeout(requestTimeoutMs), pendingRequestData(nullptr), pendingRequestDataSize(0),
+      pendingIsPost(false), responseSize(0) {
 }
 
 // Network byte order conversion functions
@@ -175,6 +179,283 @@ bool ESPGameAPI::makeHttpGetRequest(const String& endpoint, uint8_t* response, s
     }
 }
 
+// Non-blocking HTTP request methods
+bool ESPGameAPI::startHttpRequest(const String& endpoint, const uint8_t* data, size_t dataSize, RequestType requestType) {
+    if (currentRequestState != REQ_IDLE) {
+        Serial.println("❌ Cannot start request: another request is pending");
+        return false;
+    }
+    
+    if (!isLoggedIn && requestType != REQ_LOGIN) {
+        Serial.println("❌ Not logged in");
+        return false;
+    }
+    
+    // Store request parameters
+    pendingEndpoint = endpoint;
+    pendingIsPost = true;
+    pendingRequestDataSize = dataSize;
+    currentRequestType = requestType;
+    
+    // Copy data if provided
+    if (data && dataSize > 0) {
+        pendingRequestData = new uint8_t[dataSize];
+        memcpy(pendingRequestData, data, dataSize);
+    } else {
+        pendingRequestData = nullptr;
+        pendingRequestDataSize = 0;
+    }
+    
+    String fullUrl = baseUrl + endpoint;
+    Serial.println("📤 Starting async request to: " + fullUrl);
+    
+    http.begin(fullUrl);
+    if (isLoggedIn) {
+        http.addHeader("Authorization", "Bearer " + token);
+    }
+    
+    if (requestType == REQ_LOGIN) {
+        http.addHeader("Content-Type", "application/json");
+    } else {
+        http.addHeader("Content-Type", "application/octet-stream");
+    }
+    
+    // Set timeout for the HTTP client
+    http.setTimeout(5000);  // 5 second timeout per operation
+    
+    currentRequestState = REQ_PENDING;
+    requestStartTime = millis();
+    
+    return true;
+}
+
+bool ESPGameAPI::startHttpGetRequest(const String& endpoint, RequestType requestType) {
+    if (currentRequestState != REQ_IDLE) {
+        Serial.println("❌ Cannot start GET request: another request is pending");
+        return false;
+    }
+    
+    if (!isLoggedIn) {
+        Serial.println("❌ Not logged in");
+        return false;
+    }
+    
+    pendingEndpoint = endpoint;
+    pendingIsPost = false;
+    pendingRequestData = nullptr;
+    pendingRequestDataSize = 0;
+    currentRequestType = requestType;
+    
+    String fullUrl = baseUrl + endpoint;
+    Serial.println("📤 Starting async GET request to: " + fullUrl);
+    
+    http.begin(fullUrl);
+    http.addHeader("Authorization", "Bearer " + token);
+    http.setTimeout(5000);
+    
+    currentRequestState = REQ_PENDING;
+    requestStartTime = millis();
+    
+    return true;
+}
+
+bool ESPGameAPI::processRequest() {
+    if (currentRequestState == REQ_IDLE) {
+        return true;  // Nothing to process
+    }
+    
+    // Check for timeout
+    if (millis() - requestStartTime > requestTimeout) {
+        Serial.println("❌ Request timeout");
+        abortRequest();
+        return false;
+    }
+    
+    if (currentRequestState == REQ_PENDING) {
+        // Start the actual HTTP request
+        int httpCode;
+        if (pendingIsPost) {
+            if (currentRequestType == REQ_LOGIN) {
+                // For login, data is JSON string
+                String jsonData = String((char*)pendingRequestData);
+                httpCode = http.POST(jsonData);
+            } else {
+                // For other requests, data is binary
+                httpCode = http.POST(pendingRequestData, pendingRequestDataSize);
+            }
+        } else {
+            httpCode = http.GET();
+        }
+        
+        if (httpCode > 0) {
+            currentRequestState = REQ_PROCESSING;
+            Serial.println("📥 HTTP Response Code: " + String(httpCode));
+            
+            if (httpCode == 200) {
+                WiFiClient* stream = http.getStreamPtr();
+                responseSize = stream->available();
+                if (responseSize > 0) {
+                    responseSize = min(responseSize, sizeof(responseBuffer));
+                    stream->readBytes(responseBuffer, responseSize);
+                }
+                currentRequestState = REQ_COMPLETED;
+                Serial.println("✅ Request successful, response size: " + String(responseSize));
+            } else {
+                String errorResponse = http.getString();
+                Serial.println("❌ HTTP request failed: " + String(httpCode));
+                Serial.println("📄 Error response: " + errorResponse);
+                currentRequestState = REQ_ERROR;
+            }
+        } else if (httpCode == HTTPC_ERROR_CONNECTION_REFUSED || 
+                   httpCode == HTTPC_ERROR_SEND_HEADER_FAILED ||
+                   httpCode == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
+            Serial.println("❌ HTTP connection error: " + String(httpCode));
+            currentRequestState = REQ_ERROR;
+        }
+        // If httpCode is 0 or negative but not a definitive error, keep waiting
+    }
+    
+    return currentRequestState != REQ_ERROR;
+}
+
+void ESPGameAPI::completeRequest() {
+    if (currentRequestState != REQ_COMPLETED) {
+        return;
+    }
+    
+    // Process the response based on request type
+    switch (currentRequestType) {
+        case REQ_LOGIN:
+            if (responseSize > 0) {
+                String response = String((char*)responseBuffer);
+                JsonDocument responseDoc;
+                
+                if (deserializeJson(responseDoc, response) == DeserializationError::Ok) {
+                    if (responseDoc["token"].is<String>()) {
+                        token = responseDoc["token"].as<String>();
+                        isLoggedIn = true;
+                        Serial.println("🔐 Successfully logged in");
+                        Serial.println("🎫 Token: " + token.substring(0, 20) + "...");
+                    } else {
+                        Serial.println("❌ Token not found in response");
+                    }
+                } else {
+                    Serial.println("❌ Failed to parse JSON response");
+                }
+            }
+            break;
+            
+        case REQ_REGISTER:
+            if (responseSize >= 2) {
+                uint8_t successFlag = responseBuffer[0];
+                uint8_t messageLength = responseBuffer[1];
+                
+                if (successFlag == 0x01) {
+                    isRegistered = true;
+                    Serial.println("📋 Successfully registered board: " + boardName);
+                } else {
+                    if (messageLength > 0 && responseSize >= (2 + messageLength)) {
+                        String errorMsg = "";
+                        for (int i = 0; i < messageLength && i < 64; i++) {
+                            errorMsg += (char)responseBuffer[2 + i];
+                        }
+                        Serial.println("❌ Registration failed: " + errorMsg);
+                    } else {
+                        Serial.println("❌ Registration failed: unknown error");
+                    }
+                }
+            }
+            break;
+            
+        case REQ_POLL_COEFFICIENTS:
+            if (responseSize >= 2) {
+                // Parse production coefficients
+                uint8_t prodCount = responseBuffer[0];
+                size_t offset = 1;
+                
+                if (responseSize >= (offset + prodCount * 5 + 1)) {
+                    productionCoefficients.clear();
+                    for (uint8_t i = 0; i < prodCount; i++) {
+                        ProductionCoefficient coeff;
+                        coeff.source_id = responseBuffer[offset];
+                        int32_t coeffRaw = networkToHostLong(*(uint32_t*)(responseBuffer + offset + 1));
+                        coeff.coefficient = (float)coeffRaw / 1000.0;
+                        productionCoefficients.push_back(coeff);
+                        offset += 5;
+                    }
+                    
+                    // Parse consumption coefficients
+                    uint8_t consCount = responseBuffer[offset];
+                    offset++;
+                    
+                    if (responseSize >= (offset + consCount * 5)) {
+                        consumptionCoefficients.clear();
+                        for (uint8_t i = 0; i < consCount; i++) {
+                            ConsumptionCoefficient coeff;
+                            coeff.building_id = responseBuffer[offset];
+                            int32_t consRaw = networkToHostLong(*(uint32_t*)(responseBuffer + offset + 1));
+                            coeff.consumption = (float)consRaw / 1000.0;
+                            consumptionCoefficients.push_back(coeff);
+                            offset += 5;
+                        }
+                        
+                        gameActive = true;
+                        Serial.println("📊 Received " + String(prodCount) + " production and " + String(consCount) + " consumption coefficients");
+                    }
+                }
+            } else if (responseSize == 0) {
+                // Empty response means game is not active
+                gameActive = false;
+                productionCoefficients.clear();
+                consumptionCoefficients.clear();
+            }
+            break;
+            
+        case REQ_SUBMIT_POWER:
+            Serial.println("⚡ Power data submitted successfully");
+            break;
+            
+        case REQ_REPORT_PLANTS:
+            Serial.println("🔌 Power plants reported successfully");
+            break;
+            
+        case REQ_REPORT_CONSUMERS:
+            Serial.println("🏠 Consumers reported successfully");
+            break;
+            
+        default:
+            break;
+    }
+    
+    // Reset state
+    currentRequestState = REQ_IDLE;
+    currentRequestType = REQ_NONE;
+    
+    // Clean up
+    if (pendingRequestData) {
+        delete[] pendingRequestData;
+        pendingRequestData = nullptr;
+    }
+    pendingRequestDataSize = 0;
+    
+    http.end();
+}
+
+void ESPGameAPI::abortRequest() {
+    Serial.println("🚫 Aborting request");
+    
+    currentRequestState = REQ_IDLE;
+    currentRequestType = REQ_NONE;
+    
+    if (pendingRequestData) {
+        delete[] pendingRequestData;
+        pendingRequestData = nullptr;
+    }
+    pendingRequestDataSize = 0;
+    
+    http.end();
+}
+
 // Register board with the new binary protocol (empty body, board ID from JWT)
 bool ESPGameAPI::registerBoard() {
     if (!isLoggedIn) {
@@ -224,6 +505,101 @@ bool ESPGameAPI::registerBoard() {
     }
     
     return false;
+}
+
+// Non-blocking async methods
+bool ESPGameAPI::loginAsync(const String& user, const String& pass) {
+    username = user;
+    password = pass;
+    
+    JsonDocument doc;
+    doc["username"] = username;
+    doc["password"] = password;
+    
+    String jsonString;
+    serializeJson(doc, jsonString);
+    
+    Serial.println("🔐 Starting async login for: " + username);
+    Serial.println("📤 Sending JSON: " + jsonString);
+    
+    return startHttpRequest("/coreapi/login", (uint8_t*)jsonString.c_str(), jsonString.length(), REQ_LOGIN);
+}
+
+bool ESPGameAPI::registerBoardAsync() {
+    if (!isLoggedIn) {
+        Serial.println("❌ Cannot register: not logged in");
+        return false;
+    }
+    
+    Serial.println("📋 Starting async board registration...");
+    return startHttpRequest("/coreapi/register", nullptr, 0, REQ_REGISTER);
+}
+
+bool ESPGameAPI::pollCoefficientsAsync() {
+    if (!isRegistered) {
+        Serial.println("❌ Cannot poll: board not registered");
+        return false;
+    }
+    
+    return startHttpGetRequest("/coreapi/poll_binary", REQ_POLL_COEFFICIENTS);
+}
+
+bool ESPGameAPI::submitPowerDataAsync(float production, float consumption) {
+    if (!isRegistered) {
+        Serial.println("❌ Cannot submit data: board not registered");
+        return false;
+    }
+    
+    PowerDataRequest req;
+    req.production = hostToNetworkLong((int32_t)(production * 1000));
+    req.consumption = hostToNetworkLong((int32_t)(consumption * 1000));
+    
+    return startHttpRequest("/coreapi/post_vals", (uint8_t*)&req, sizeof(req), REQ_SUBMIT_POWER);
+}
+
+bool ESPGameAPI::reportConnectedPowerPlantsAsync(const std::vector<ConnectedPowerPlant>& plants) {
+    if (!isRegistered) {
+        Serial.println("❌ Cannot report power plants: board not registered");
+        return false;
+    }
+    
+    size_t dataSize = 1 + plants.size() * 8;
+    uint8_t* data = new uint8_t[dataSize];
+    
+    data[0] = (uint8_t)plants.size();
+    size_t offset = 1;
+    
+    for (const auto& plant : plants) {
+        *(uint32_t*)(data + offset) = hostToNetworkLong(plant.plant_id);
+        *(int32_t*)(data + offset + 4) = hostToNetworkLong((int32_t)(plant.set_power * 1000));
+        offset += 8;
+    }
+    
+    bool result = startHttpRequest("/coreapi/prod_connected", data, dataSize, REQ_REPORT_PLANTS);
+    delete[] data;
+    return result;
+}
+
+bool ESPGameAPI::reportConnectedConsumersAsync(const std::vector<ConnectedConsumer>& consumers) {
+    if (!isRegistered) {
+        Serial.println("❌ Cannot report consumers: board not registered");
+        return false;
+    }
+    
+    size_t dataSize = 1 + consumers.size() * 4;
+    uint8_t* data = new uint8_t[dataSize];
+    
+    data[0] = (uint8_t)consumers.size();
+    size_t offset = 1;
+    
+    for (const auto& consumer : consumers) {
+        *(uint32_t*)(data + offset) = hostToNetworkLong(consumer.consumer_id);
+        offset += 4;
+    }
+    
+    bool result = startHttpRequest("/coreapi/cons_connected", data, dataSize, REQ_REPORT_CONSUMERS);
+    delete[] data;
+    return result;
 }
 
 // Submit power data using new binary protocol (8 bytes: production + consumption)
@@ -419,10 +795,29 @@ bool ESPGameAPI::reportConnectedConsumers(const std::vector<ConnectedConsumer>& 
     return false;
 }
 
-// Main update function - call this in Arduino loop()
+// Main update function - call this in Arduino loop() - now non-blocking!
 bool ESPGameAPI::update() {
     if (!isConnected()) {
         return false;
+    }
+    
+    // Always process any pending requests first
+    bool requestProcessed = false;
+    if (currentRequestState != REQ_IDLE) {
+        if (processRequest()) {
+            if (currentRequestState == REQ_COMPLETED) {
+                completeRequest();
+                requestProcessed = true;
+            }
+        } else {
+            // Request failed or timed out
+            abortRequest();
+        }
+    }
+    
+    // Don't start new requests if one is already pending
+    if (currentRequestState != REQ_IDLE) {
+        return requestProcessed;
     }
     
     unsigned long currentTime = millis();
@@ -431,8 +826,9 @@ bool ESPGameAPI::update() {
     // Poll coefficients at poll interval
     if (currentTime - lastPollTime >= pollInterval) {
         lastPollTime = currentTime;
-        if (pollCoefficients()) {
-            updated = true;
+        if (pollCoefficientsAsync()) {
+            // Request started, will be processed in next update() call
+            return true;
         }
     }
     
@@ -443,25 +839,29 @@ bool ESPGameAPI::update() {
         // Report connected devices if callbacks are set
         if (powerPlantsCallback) {
             std::vector<ConnectedPowerPlant> plants = powerPlantsCallback();
-            reportConnectedPowerPlants(plants);
+            if (reportConnectedPowerPlantsAsync(plants)) {
+                return true;  // Request started
+            }
         }
         
         if (consumersCallback) {
             std::vector<ConnectedConsumer> consumers = consumersCallback();
-            reportConnectedConsumers(consumers);
+            if (reportConnectedConsumersAsync(consumers)) {
+                return true;  // Request started
+            }
         }
         
         // Submit power data if callbacks are set
         if (productionCallback && consumptionCallback) {
             float production = productionCallback();
             float consumption = consumptionCallback();
-            if (submitPowerData(production, consumption)) {
-                updated = true;
+            if (submitPowerDataAsync(production, consumption)) {
+                return true;  // Request started
             }
         }
     }
     
-    return updated;
+    return requestProcessed;
 }
 
 // Helper function to parse production coefficients from binary data

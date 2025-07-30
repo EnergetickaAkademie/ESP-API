@@ -79,6 +79,28 @@ struct __attribute__((packed)) ConsumerEntry {
     uint32_t consumer_id; // big-endian
 };
 
+// Request states for non-blocking operation
+enum RequestState {
+    REQ_IDLE,
+    REQ_PENDING,
+    REQ_PROCESSING,
+    REQ_COMPLETED,
+    REQ_ERROR
+};
+
+// Request types
+enum RequestType {
+    REQ_NONE,
+    REQ_LOGIN,
+    REQ_REGISTER,
+    REQ_POLL_COEFFICIENTS,
+    REQ_SUBMIT_POWER,
+    REQ_PROD_VALUES,
+    REQ_CONS_VALUES,
+    REQ_REPORT_PLANTS,
+    REQ_REPORT_CONSUMERS
+};
+
 class ESPGameAPI {
 private:
     String baseUrl;
@@ -95,6 +117,18 @@ private:
     unsigned long updateInterval;
     unsigned long lastPollTime;
     unsigned long pollInterval;
+    
+    // Non-blocking request management
+    RequestState currentRequestState;
+    RequestType currentRequestType;
+    unsigned long requestStartTime;
+    unsigned long requestTimeout;
+    uint8_t* pendingRequestData;
+    size_t pendingRequestDataSize;
+    String pendingEndpoint;
+    bool pendingIsPost;
+    uint8_t responseBuffer[1000];
+    size_t responseSize;
     
     // Callbacks for user-provided functions
     PowerCallback productionCallback;
@@ -118,6 +152,15 @@ private:
     
     // Helper functions
     String boardTypeToString(BoardType type) const;
+    
+    // Non-blocking HTTP request methods
+    bool startHttpRequest(const String& endpoint, const uint8_t* data, size_t dataSize, RequestType requestType);
+    bool startHttpGetRequest(const String& endpoint, RequestType requestType);
+    bool processRequest();
+    void completeRequest();
+    void abortRequest();
+    
+    // Legacy blocking methods (deprecated, kept for compatibility)
     bool makeHttpRequest(const String& endpoint, const uint8_t* data, size_t dataSize, uint8_t* response, size_t& responseSize);
     bool makeHttpGetRequest(const String& endpoint, uint8_t* response, size_t& responseSize);
     
@@ -128,7 +171,20 @@ private:
 public:
     // Constructor
     ESPGameAPI(const String& serverUrl, const String& name, BoardType type, 
-               unsigned long updateIntervalMs = 3000, unsigned long pollIntervalMs = 5000);
+               unsigned long updateIntervalMs = 3000, unsigned long pollIntervalMs = 5000,
+               unsigned long requestTimeoutMs = 10000);
+    
+    // Non-blocking alternatives to existing methods
+    bool loginAsync(const String& user, const String& pass);
+    bool registerBoardAsync();
+    bool pollCoefficientsAsync();
+    bool submitPowerDataAsync(float production, float consumption);
+    bool reportConnectedPowerPlantsAsync(const std::vector<ConnectedPowerPlant>& plants);
+    bool reportConnectedConsumersAsync(const std::vector<ConnectedConsumer>& consumers);
+    
+    // Check if there's a pending request
+    bool isRequestPending() const { return currentRequestState == REQ_PENDING || currentRequestState == REQ_PROCESSING; }
+    RequestState getRequestState() const { return currentRequestState; }
     
     // Authentication and registration (separate steps)
     bool login(const String& user, const String& pass);
