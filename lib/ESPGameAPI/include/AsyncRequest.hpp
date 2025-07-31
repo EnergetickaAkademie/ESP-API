@@ -69,13 +69,17 @@ private:
       if(cb) cb(err,status,body);
     }
     void logFail(esp_err_t err){
+      // The payload can be binary that is not printable,
+      // so we only log the URL and error.
+      bool isBinary = !payload.empty() &&
+                      (payload.find_first_not_of("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") == std::string::npos);
       Serial.printf("❌ HTTP %s %s\n"
                     "   err  = %s\n"
                     "   body = %s\n",
                     method==Method::POST?"POST":"GET",
                     url.c_str(),
                     esp_err_to_name(err),
-                    payload.empty()?"<empty>":payload.c_str());
+                    isBinary?"<binary>":(payload.empty()?"<empty>":payload.c_str()));
     }
   };
 
@@ -93,7 +97,7 @@ private:
         ctx->finish(r,-1);
         break;
       }
-      vTaskDelay(pdMS_TO_TICKS(10));
+      vTaskDelay(pdMS_TO_TICKS(250));
     }
     esp_http_client_cleanup(ctx->client);
     delete ctx;
