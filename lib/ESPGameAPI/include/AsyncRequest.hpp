@@ -24,12 +24,12 @@ public:
     auto* ctx = new Ctx;
     ctx->cb       = std::move(cb);
     ctx->payload  = std::move(payload);      // ⭐ keep a private copy
-
+    auto isHttp = url.rfind("http://", 0) == 0;
     esp_http_client_config_t cfg = {};
     cfg.url               = url.c_str();
     cfg.event_handler      = _event;
     cfg.user_data          = ctx;
-    cfg.is_async           = true;
+    cfg.is_async           = !isHttp;
     cfg.timeout_ms         = 7000;
     cfg.crt_bundle_attach  = arduino_esp_crt_bundle_attach;
 
