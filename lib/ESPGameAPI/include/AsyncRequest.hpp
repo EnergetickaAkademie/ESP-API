@@ -78,7 +78,7 @@ private:
                     "   len  = " + std::to_string(payload.size()),
                     method==Method::POST?"POST":"GET",
                     url.c_str(),
-                    esp_err_to_name(err),);
+                    esp_err_to_name(err));
     }
   };
 
