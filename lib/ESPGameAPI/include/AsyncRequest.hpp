@@ -74,12 +74,11 @@ private:
       bool isBinary = !payload.empty() &&
                       (payload.find_first_not_of("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") == std::string::npos);
       Serial.printf("❌ HTTP %s %s\n"
-                    "   err  = %s\n"
-                    "   body = %s\n",
+                    "   err  = %s\n",
+                    "   len  = " + std::to_string(payload.size()),
                     method==Method::POST?"POST":"GET",
                     url.c_str(),
-                    esp_err_to_name(err),
-                    isBinary?"<binary>":(payload.empty()?"<empty>":payload.c_str()));
+                    esp_err_to_name(err),);
     }
   };
 
