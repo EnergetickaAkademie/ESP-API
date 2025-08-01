@@ -3,10 +3,16 @@
 #include <vector>
 #include <utility>
 #include <functional>
+#include <queue>
+#include <memory>
 
 extern "C" {
   #include "esp_http_client.h"
   #include "esp_crt_bundle.h"
+  #include "freertos/FreeRTOS.h"
+  #include "freertos/task.h"
+  #include "freertos/semphr.h"
+  #include "esp_log.h"
 }
 
 class AsyncRequest {
@@ -14,6 +20,27 @@ public:
   enum class Method { GET, POST };
   using DoneCB = std::function<void(esp_err_t,int,std::string)>;
 
+private:
+  struct RequestItem {
+    Method method;
+    std::string url;
+    std::string payload;
+    std::vector<std::pair<std::string, std::string>> headers;
+    DoneCB callback;
+  };
+
+  static std::queue<RequestItem*> requestQueue;
+  static SemaphoreHandle_t queueMutex;
+  static bool isProcessing;
+  static TaskHandle_t queueProcessorTask;
+
+  static void initializeQueue() {
+    if (!queueMutex) {
+      queueMutex = xSemaphoreCreateMutex();
+    }
+  }
+
+public:
   static void fetch(Method                                            method,
                     const std::string&                                url,
                     std::string                                       payload,      // moved in
@@ -21,39 +48,28 @@ public:
                                                  std::string>>&       headers,
                     DoneCB                                            cb)
   {
-    auto* ctx = new Ctx;
-    ctx->cb       = std::move(cb);
-    ctx->payload  = std::move(payload);
-    ctx->url      = url;
-    ctx->method   = method;
+    initializeQueue();
+    
+    auto* request = new RequestItem();
+    request->method = method;
+    request->url = url;
+    request->payload = std::move(payload);
+    request->headers = headers;
+    request->callback = std::move(cb);
 
-    const bool isHttp = url.rfind("http://", 0) == 0;
-
-    esp_http_client_config_t cfg = {};
-    cfg.url               = ctx->url.c_str();
-    cfg.event_handler      = _event;
-    cfg.user_data          = ctx;
-    cfg.is_async           = !isHttp;                 // async only for HTTPS
-    cfg.timeout_ms         = 7000;
-    cfg.crt_bundle_attach  = arduino_esp_crt_bundle_attach;
-
-    ctx->client = esp_http_client_init(&cfg);
-    if (!ctx->client) { ctx->logFail(ESP_FAIL); delete ctx; return; }
-
-    if (method == Method::POST) {
-      esp_http_client_set_method(ctx->client, HTTP_METHOD_POST);
-      if (!ctx->payload.empty())
-        esp_http_client_set_post_field(ctx->client,
-                                       ctx->payload.c_str(),
-                                       ctx->payload.size());
+    // Add request to queue
+    if (xSemaphoreTake(queueMutex, portMAX_DELAY) == pdTRUE) {
+      requestQueue.push(request);
+      
+      // Start queue processor if not already running
+      if (!isProcessing) {
+        isProcessing = true;
+        xTaskCreate(_queueProcessor, "httpqueue", 6144, nullptr,
+                    tskIDLE_PRIORITY + 1, &queueProcessorTask);
+      }
+      
+      xSemaphoreGive(queueMutex);
     }
-
-    for (auto& h : headers)
-      esp_http_client_set_header(ctx->client,
-                                 h.first.c_str(), h.second.c_str());
-
-    xTaskCreate(_worker, "httpw", 6144, ctx,
-                tskIDLE_PRIORITY + 1, nullptr);
   }
 
 private:
@@ -71,36 +87,94 @@ private:
     void logFail(esp_err_t err){
       // The payload can be binary that is not printable,
       // so we only log the URL and error.
-      bool isBinary = !payload.empty() &&
-                      (payload.find_first_not_of("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") == std::string::npos);
-      Serial.printf("❌ HTTP %s %s\n"
-                    "   err  = %s\n",
-                    "   len  = " + std::to_string(payload.size()),
-                    method==Method::POST?"POST":"GET",
-                    url.c_str(),
-                    esp_err_to_name(err));
+      ESP_LOGE("AsyncRequest", "❌ HTTP %s %s\n"
+                              "   err  = %s\n"
+                              "   len  = %d",
+                              method==Method::POST?"POST":"GET",
+                              url.c_str(),
+                              esp_err_to_name(err),
+                              (int)payload.size());
     }
   };
 
-  static void _worker(void* arg){
-    auto* ctx = static_cast<Ctx*>(arg);
+  static void _queueProcessor(void* arg) {
     while (true) {
-      esp_err_t r = esp_http_client_perform(ctx->client);
-      if (r == ESP_OK) {                      // success
-        ctx->finish(ESP_OK,
-                    esp_http_client_get_status_code(ctx->client));
+      RequestItem* request = nullptr;
+      
+      // Get next request from queue
+      if (xSemaphoreTake(queueMutex, portMAX_DELAY) == pdTRUE) {
+        if (!requestQueue.empty()) {
+          request = requestQueue.front();
+          requestQueue.pop();
+        }
+        xSemaphoreGive(queueMutex);
+      }
+      
+      if (!request) {
+        // No more requests, stop processing
+        if (xSemaphoreTake(queueMutex, portMAX_DELAY) == pdTRUE) {
+          isProcessing = false;
+          xSemaphoreGive(queueMutex);
+        }
         break;
       }
-      if (r != ESP_ERR_HTTP_EAGAIN) {         // fatal
-        ctx->logFail(r);
-        ctx->finish(r,-1);
-        break;
-      }
-      vTaskDelay(pdMS_TO_TICKS(250));
+      
+      // Process the request synchronously
+      _executeRequest(request);
+      delete request;
     }
+    
+    vTaskDelete(nullptr);
+  }
+
+  static void _executeRequest(RequestItem* request) {
+    auto* ctx = new Ctx;
+    ctx->cb = std::move(request->callback);
+    ctx->payload = std::move(request->payload);
+    ctx->url = request->url;
+    ctx->method = request->method;
+
+    const bool isHttp = request->url.rfind("http://", 0) == 0;
+
+    esp_http_client_config_t cfg = {};
+    cfg.url = ctx->url.c_str();
+    cfg.event_handler = _event;
+    cfg.user_data = ctx;
+    cfg.is_async = false; // Always synchronous now for queue control
+    cfg.timeout_ms = 7000;
+    cfg.crt_bundle_attach = arduino_esp_crt_bundle_attach;
+
+    ctx->client = esp_http_client_init(&cfg);
+    if (!ctx->client) { 
+      ctx->logFail(ESP_FAIL); 
+      ctx->finish(ESP_FAIL, -1);
+      delete ctx; 
+      return; 
+    }
+
+    if (request->method == Method::POST) {
+      esp_http_client_set_method(ctx->client, HTTP_METHOD_POST);
+      if (!ctx->payload.empty())
+        esp_http_client_set_post_field(ctx->client,
+                                       ctx->payload.c_str(),
+                                       ctx->payload.size());
+    }
+
+    for (auto& h : request->headers)
+      esp_http_client_set_header(ctx->client,
+                                 h.first.c_str(), h.second.c_str());
+
+    // Execute the request synchronously
+    esp_err_t r = esp_http_client_perform(ctx->client);
+    if (r == ESP_OK) {
+      ctx->finish(ESP_OK, esp_http_client_get_status_code(ctx->client));
+    } else {
+      ctx->logFail(r);
+      ctx->finish(r, -1);
+    }
+
     esp_http_client_cleanup(ctx->client);
     delete ctx;
-    vTaskDelete(nullptr);
   }
 
   static esp_err_t _event(esp_http_client_event_t* e){

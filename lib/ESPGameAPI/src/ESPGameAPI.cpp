@@ -1,4 +1,5 @@
 #include "ESPGameAPI.h"
+#include "AsyncRequest.hpp"
 #include <ArduinoJson.h>
 
 // Forward declaration for embedded certificate bundle
