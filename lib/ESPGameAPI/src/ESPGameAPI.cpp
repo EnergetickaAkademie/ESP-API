@@ -252,26 +252,6 @@ void ESPGameAPI::parsePollResponse(const uint8_t* data, size_t len) {
     Serial.println("🎮 Game active - parsed " + String(prodCount) + " production and " + String(consCount) + " consumption coefficients");
 }
 
-bool ESPGameAPI::parseProductionCoefficients(const uint8_t* data, size_t len) {
-    if (len < 1) return false;
-    
-    uint8_t count = data[0];
-    size_t offset = 1;
-    
-    if (len < offset + count * 5) return false;
-    
-    productionCoefficients.clear();
-    for (uint8_t i = 0; i < count; i++) {
-        ProductionCoefficient coeff;
-        coeff.source_id = data[offset];
-        coeff.coefficient = static_cast<float>(networkToHostLong(*reinterpret_cast<const uint32_t*>(data + offset + 1))) / 1000.0f;
-        productionCoefficients.push_back(coeff);
-        offset += 5;
-    }
-    
-    return true;
-}
-
 bool ESPGameAPI::parseProductionRanges(const uint8_t* data, size_t len) {
     if (len < 1) return false;
     
@@ -470,41 +450,6 @@ void ESPGameAPI::reportConnectedConsumers(const std::vector<ConnectedConsumer>& 
             } else {
                 Serial.println("❌ Report consumers HTTP error: " + String(status));
                 if (callback) callback(false, "HTTP error: " + std::to_string(status));
-            }
-        });
-}
-
-void ESPGameAPI::getProductionValues(ProductionCallback callback) {
-    if (!isRegistered) {
-        if (callback) callback(false, {}, "Board not registered");
-        return;
-    }
-    
-    AsyncRequest::fetch(
-        AsyncRequest::Method::GET,
-        std::string((baseUrl + "/coreapi/prod_vals").c_str()),
-        "",
-        { { "Authorization", "Bearer " + std::string(token.c_str()) } },
-        [this, callback](esp_err_t err, int status, std::string body) {
-            if (err != ESP_OK) {
-                Serial.println("❌ Get production values failed: " + String(esp_err_to_name(err)));
-                if (callback) callback(false, {}, "Network error: " + std::string(esp_err_to_name(err)));
-                return;
-            }
-            
-            if (status == 200) {
-                std::vector<ProductionCoefficient> coeffs;
-                if (parseProductionCoefficients(reinterpret_cast<const uint8_t*>(body.data()), body.size())) {
-                    coeffs = productionCoefficients;
-                    Serial.println("✅ Production values retrieved successfully");
-                    if (callback) callback(true, coeffs, "");
-                } else {
-                    Serial.println("❌ Failed to parse production values");
-                    if (callback) callback(false, {}, "Failed to parse response");
-                }
-            } else {
-                Serial.println("❌ Get production values HTTP error: " + String(status));
-                if (callback) callback(false, {}, "HTTP error: " + std::to_string(status));
             }
         });
 }

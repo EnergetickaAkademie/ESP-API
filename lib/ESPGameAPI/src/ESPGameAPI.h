@@ -1,7 +1,11 @@
 #ifndef ESP_GAME_API_H
 #define ESP_GAME_API_H
 
-#include <Arduino.h>
+#// Async callback types for endpoints
+using AsyncCallback           = std::function<void(bool success, const std::string& error)>;
+using CoefficientsCallback    = std::function<void(bool success, const std::string& error)>;
+using ProductionRangeCallback = std::function<void(bool success, const std::vector<ProductionRange>& ranges, const std::string& error)>;
+using ConsumptionValCallback  = std::function<void(bool success, const std::vector<ConsumptionCoefficient>& coeffs, const std::string& error)>;e <Arduino.h>
 #include <WiFi.h>
 #include <vector>
 #include <functional>
@@ -93,7 +97,6 @@ private:
     String   boardTypeToString(BoardType) const;
 
     // parsing helpers
-    bool parseProductionCoefficients (const uint8_t*, size_t);
     bool parseProductionRanges       (const uint8_t*, size_t);
     bool parseConsumptionCoefficients(const uint8_t*, size_t);
     void parsePollResponse(const uint8_t* data, size_t len);
@@ -123,7 +126,6 @@ public:
 
     // Async API operations
     void pollCoefficients(CoefficientsCallback callback = nullptr);
-    void getProductionValues(ProductionCallback callback);
     void getProductionRanges(ProductionRangeCallback callback);
     void getConsumptionValues(ConsumptionValCallback callback);
     void submitPowerData(float production, float consumption, AsyncCallback callback = nullptr);

@@ -52,7 +52,6 @@ api.submitPowerData(production, consumption, [](bool success, const std::string&
 ```cpp
 using AsyncCallback           = std::function<void(bool success, const std::string& error)>;
 using CoefficientsCallback    = std::function<void(bool success, const std::string& error)>;
-using ProductionCallback      = std::function<void(bool success, const std::vector<ProductionCoefficient>& coeffs, const std::string& error)>;
 using ProductionRangeCallback = std::function<void(bool success, const std::vector<ProductionRange>& ranges, const std::string& error)>;
 using ConsumptionValCallback  = std::function<void(bool success, const std::vector<ConsumptionCoefficient>& coeffs, const std::string& error)>;
 ```
@@ -180,21 +179,7 @@ api.submitPowerData(production, consumption, [](bool success, const std::string&
 });
 ```
 
-#### Get Production Values
-```cpp
-api.getProductionValues([](bool success, const std::vector<ProductionCoefficient>& coeffs, const std::string& error) {
-    if (success) {
-        Serial.println("📊 Production coefficients (" + String(coeffs.size()) + "):");
-        for (const auto& coeff : coeffs) {
-            Serial.println("  Source " + String(coeff.source_id) + ": " + String(coeff.coefficient, 3) + "W");
-        }
-    } else {
-        Serial.println("❌ Error: " + String(error.c_str()));
-    }
-});
-```
-
-#### Get Production Ranges (NEW!)
+#### Get Production Ranges
 ```cpp
 api.getProductionRanges([](bool success, const std::vector<ProductionRange>& ranges, const std::string& error) {
     if (success) {
