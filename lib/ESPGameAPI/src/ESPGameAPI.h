@@ -1,14 +1,56 @@
 #ifndef ESP_GAME_API_H
 #define ESP_GAME_API_H
 
-#// Async callback types for endpoints
-using AsyncCallback           = std::function<void(bool success, const std::string& error)>;
-using CoefficientsCallback    = std::function<void(bool success, const std::string& error)>;
-using ProductionRangeCallback = std::function<void(bool success, const std::vector<ProductionRange>& ranges, const std::string& error)>;
-using ConsumptionValCallback  = std::function<void(bool success, const std::vector<ConsumptionCoefficient>& coeffs, const std::string& error)>;e <Arduino.h>
+#include <Arduino.h>
 #include <WiFi.h>
 #include <vector>
 #include <functional>
+#include "AsyncRequest.hpp"
+
+// Forward declaration for certificate bundle
+extern "C" {
+    #include "esp_crt_bundle.h"
+}
+
+// ───────────────────────────────── Debug (prints off by default)
+#ifdef ESPGAMEAPI_ENABLE_SERIAL
+  #define DBG_SERIAL Serial
+#else
+  // tiny dummy object that swallows every call
+  struct _DbgSerial_ {
+    template<class... A> void print  (A...) {}
+    template<class... A> void println(A...) {}
+    template<class... A> void printf (const char*, A...) {}
+  };
+  static _DbgSerial_ DBG_SERIAL;
+#endif
+// ─────────────────────────────────
+
+// Protocol version
+#define PROTOCOL_VERSION 0x01
+#define POWER_NULL_VALUE 0x7FFFFFFF       // special power value
+#define FLAG_GENERATION_PRESENT 0x01
+#define FLAG_CONSUMPTION_PRESENT 0x02
+
+// Board types
+enum BoardType { BOARD_SOLAR, BOARD_WIND, BOARD_BATTERY, BOARD_GENERIC };
+
+// Structures (unchanged) -------------------------------------------------------
+struct ProductionCoefficient  { uint8_t source_id;   float coefficient;  };
+struct ProductionRange        { uint8_t source_id;   float min_power; float max_power; };
+struct ConsumptionCoefficient { uint8_t building_id; float consumption; };
+struct ConnectedPowerPlant    { uint32_t plant_id;   float set_power;   };
+struct ConnectedConsumer      { uint32_t consumer_id; };
+
+using PowerCallback       = std::function<float()>;
+using PowerPlantsCallback = std::function<std::vector<ConnectedPowerPlant>()>;
+using ConsumersCallback   = std::function<std::vector<ConnectedConsumer>()>;
+
+// Async callback types for endpoints
+using AsyncCallback           = std::function<void(bool success, const std::string& error)>;
+using CoefficientsCallback    = std::function<void(bool success, const std::string& error)>;
+using ProductionRangeCallback = std::function<void(bool success, const std::vector<ProductionRange>& ranges, const std::string& error)>;
+using ConsumptionValCallback  = std::function<void(bool success, const std::vector<ConsumptionCoefficient>& coeffs, const std::string& error)>;
 #include "AsyncRequest.hpp"
 
 // Forward declaration for certificate bundle
