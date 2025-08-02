@@ -272,6 +272,27 @@ bool ESPGameAPI::parseProductionCoefficients(const uint8_t* data, size_t len) {
     return true;
 }
 
+bool ESPGameAPI::parseProductionRanges(const uint8_t* data, size_t len) {
+    if (len < 1) return false;
+    
+    uint8_t count = data[0];
+    size_t offset = 1;
+    
+    if (len < offset + count * 9) return false;  // 1 byte source_id + 4 bytes min + 4 bytes max
+    
+    productionRanges.clear();
+    for (uint8_t i = 0; i < count; i++) {
+        ProductionRange range;
+        range.source_id = data[offset];
+        range.min_power = static_cast<float>(networkToHostLong(*reinterpret_cast<const uint32_t*>(data + offset + 1))) / 1000.0f;
+        range.max_power = static_cast<float>(networkToHostLong(*reinterpret_cast<const uint32_t*>(data + offset + 5))) / 1000.0f;
+        productionRanges.push_back(range);
+        offset += 9;
+    }
+    
+    return true;
+}
+
 bool ESPGameAPI::parseConsumptionCoefficients(const uint8_t* data, size_t len) {
     if (len < 1) return false;
     
@@ -488,6 +509,41 @@ void ESPGameAPI::getProductionValues(ProductionCallback callback) {
         });
 }
 
+void ESPGameAPI::getProductionRanges(ProductionRangeCallback callback) {
+    if (!isRegistered) {
+        if (callback) callback(false, {}, "Board not registered");
+        return;
+    }
+    
+    AsyncRequest::fetch(
+        AsyncRequest::Method::GET,
+        std::string((baseUrl + "/coreapi/prod_vals").c_str()),
+        "",
+        { { "Authorization", "Bearer " + std::string(token.c_str()) } },
+        [this, callback](esp_err_t err, int status, std::string body) {
+            if (err != ESP_OK) {
+                Serial.println("❌ Get production ranges failed: " + String(esp_err_to_name(err)));
+                if (callback) callback(false, {}, "Network error: " + std::string(esp_err_to_name(err)));
+                return;
+            }
+            
+            if (status == 200) {
+                std::vector<ProductionRange> ranges;
+                if (parseProductionRanges(reinterpret_cast<const uint8_t*>(body.data()), body.size())) {
+                    ranges = productionRanges;
+                    Serial.println("✅ Production ranges retrieved successfully");
+                    if (callback) callback(true, ranges, "");
+                } else {
+                    Serial.println("❌ Failed to parse production ranges");
+                    if (callback) callback(false, {}, "Failed to parse response");
+                }
+            } else {
+                Serial.println("❌ Get production ranges HTTP error: " + String(status));
+                if (callback) callback(false, {}, "HTTP error: " + std::to_string(status));
+            }
+        });
+}
+
 void ESPGameAPI::getConsumptionValues(ConsumptionValCallback callback) {
     if (!isRegistered) {
         if (callback) callback(false, {}, "Board not registered");
@@ -572,6 +628,7 @@ void ESPGameAPI::printStatus() const {
     Serial.println("Update Interval: " + String(updateInterval) + "ms");
     Serial.println("Poll Interval: " + String(pollInterval) + "ms");
     Serial.println("Production Coefficients: " + String(productionCoefficients.size()));
+    Serial.println("Production Ranges: " + String(productionRanges.size()));
     Serial.println("Consumption Coefficients: " + String(consumptionCoefficients.size()));
     Serial.println("Callbacks Set:");
     Serial.println("  Production: " + String(productionCallback ? "Yes" : "No"));
@@ -588,6 +645,11 @@ void ESPGameAPI::printCoefficients() const {
     Serial.println("Production Coefficients (" + String(productionCoefficients.size()) + "):");
     for (const auto& coeff : productionCoefficients) {
         Serial.println("  Source " + String(coeff.source_id) + ": " + String(coeff.coefficient, 3) + "W");
+    }
+    
+    Serial.println("Production Ranges (" + String(productionRanges.size()) + "):");
+    for (const auto& range : productionRanges) {
+        Serial.println("  Source " + String(range.source_id) + ": " + String(range.min_power, 1) + "W - " + String(range.max_power, 1) + "W");
     }
     
     Serial.println("Consumption Coefficients (" + String(consumptionCoefficients.size()) + "):");

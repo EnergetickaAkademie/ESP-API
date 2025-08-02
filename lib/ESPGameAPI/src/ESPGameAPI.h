@@ -37,6 +37,7 @@ enum BoardType { BOARD_SOLAR, BOARD_WIND, BOARD_BATTERY, BOARD_GENERIC };
 
 // Structures (unchanged) -------------------------------------------------------
 struct ProductionCoefficient  { uint8_t source_id;   float coefficient;  };
+struct ProductionRange        { uint8_t source_id;   float min_power; float max_power; };
 struct ConsumptionCoefficient { uint8_t building_id; float consumption; };
 struct ConnectedPowerPlant    { uint32_t plant_id;   float set_power;   };
 struct ConnectedConsumer      { uint32_t consumer_id; };
@@ -49,10 +50,12 @@ using ConsumersCallback   = std::function<std::vector<ConnectedConsumer>()>;
 using AsyncCallback         = std::function<void(bool success, const std::string& error)>;
 using CoefficientsCallback  = std::function<void(bool success, const std::string& error)>;
 using ProductionCallback    = std::function<void(bool success, const std::vector<ProductionCoefficient>& coeffs, const std::string& error)>;
+using ProductionRangeCallback = std::function<void(bool success, const std::vector<ProductionRange>& ranges, const std::string& error)>;
 using ConsumptionValCallback = std::function<void(bool success, const std::vector<ConsumptionCoefficient>& coeffs, const std::string& error)>;
 
 struct __attribute__((packed)) PowerDataRequest { int32_t production; int32_t consumption; };
 struct __attribute__((packed)) ProductionEntry  { uint8_t source_id; int32_t coefficient; };
+struct __attribute__((packed)) ProductionRangeEntry { uint8_t source_id; int32_t min_power; int32_t max_power; };
 struct __attribute__((packed)) ConsumptionEntry { uint8_t building_id; int32_t consumption; };
 struct __attribute__((packed)) PowerPlantEntry  { uint32_t plant_id;  int32_t set_power;  };
 struct __attribute__((packed)) ConsumerEntry    { uint32_t consumer_id; };
@@ -74,6 +77,7 @@ private:
     ConsumersCallback   consumersCallback;
 
     std::vector<ProductionCoefficient>  productionCoefficients;
+    std::vector<ProductionRange>        productionRanges;
     std::vector<ConsumptionCoefficient> consumptionCoefficients;
     bool gameActive;
 
@@ -90,6 +94,7 @@ private:
 
     // parsing helpers
     bool parseProductionCoefficients (const uint8_t*, size_t);
+    bool parseProductionRanges       (const uint8_t*, size_t);
     bool parseConsumptionCoefficients(const uint8_t*, size_t);
     void parsePollResponse(const uint8_t* data, size_t len);
 
@@ -119,6 +124,7 @@ public:
     // Async API operations
     void pollCoefficients(CoefficientsCallback callback = nullptr);
     void getProductionValues(ProductionCallback callback);
+    void getProductionRanges(ProductionRangeCallback callback);
     void getConsumptionValues(ConsumptionValCallback callback);
     void submitPowerData(float production, float consumption, AsyncCallback callback = nullptr);
     void reportConnectedPowerPlants(const std::vector<ConnectedPowerPlant>&, AsyncCallback callback = nullptr);
@@ -126,6 +132,7 @@ public:
 
     // getters
     const std::vector<ProductionCoefficient>&  getProductionCoefficients()  const { return productionCoefficients;  }
+    const std::vector<ProductionRange>&        getProductionRanges()        const { return productionRanges;       }
     const std::vector<ConsumptionCoefficient>& getConsumptionCoefficients() const { return consumptionCoefficients; }
     bool  isGameActive() const { return gameActive; }
 

@@ -12,6 +12,7 @@ A PlatformIO library for ESP32 boards to communicate with the WebControl game se
 - 📋 **Board Registration** - Automatic board registration with server
 - ⚡ **Async Power Data** - Submit generation and consumption data asynchronously
 - 📊 **Async Coefficients** - Poll production and consumption coefficients asynchronously
+- 🎯 **Production Ranges** - Get min/max power ranges for power plants (NEW!)
 - 🔄 **Binary Protocol** - Optimized ~65% bandwidth savings vs JSON
 - 🛡️ **Error Handling** - Comprehensive error handling with callbacks
 - 📱 **Memory Efficient** - Uses binary packets with milliwatt precision
@@ -49,10 +50,11 @@ api.submitPowerData(production, consumption, [](bool success, const std::string&
 
 ### 3. New Callback Types
 ```cpp
-using AsyncCallback         = std::function<void(bool success, const std::string& error)>;
-using CoefficientsCallback  = std::function<void(bool success, const std::string& error)>;
-using ProductionCallback    = std::function<void(bool success, const std::vector<ProductionCoefficient>& coeffs, const std::string& error)>;
-using ConsumptionValCallback = std::function<void(bool success, const std::vector<ConsumptionCoefficient>& coeffs, const std::string& error)>;
+using AsyncCallback           = std::function<void(bool success, const std::string& error)>;
+using CoefficientsCallback    = std::function<void(bool success, const std::string& error)>;
+using ProductionCallback      = std::function<void(bool success, const std::vector<ProductionCoefficient>& coeffs, const std::string& error)>;
+using ProductionRangeCallback = std::function<void(bool success, const std::vector<ProductionRange>& ranges, const std::string& error)>;
+using ConsumptionValCallback  = std::function<void(bool success, const std::vector<ConsumptionCoefficient>& coeffs, const std::string& error)>;
 ```
 
 ## Hardware Requirements
@@ -185,6 +187,21 @@ api.getProductionValues([](bool success, const std::vector<ProductionCoefficient
         Serial.println("📊 Production coefficients (" + String(coeffs.size()) + "):");
         for (const auto& coeff : coeffs) {
             Serial.println("  Source " + String(coeff.source_id) + ": " + String(coeff.coefficient, 3) + "W");
+        }
+    } else {
+        Serial.println("❌ Error: " + String(error.c_str()));
+    }
+});
+```
+
+#### Get Production Ranges (NEW!)
+```cpp
+api.getProductionRanges([](bool success, const std::vector<ProductionRange>& ranges, const std::string& error) {
+    if (success) {
+        Serial.println("📊 Production ranges (" + String(ranges.size()) + "):");
+        for (const auto& range : ranges) {
+            Serial.printf("  Source %d: %.1fW - %.1fW\n", 
+                          range.source_id, range.min_power, range.max_power);
         }
     } else {
         Serial.println("❌ Error: " + String(error.c_str()));
