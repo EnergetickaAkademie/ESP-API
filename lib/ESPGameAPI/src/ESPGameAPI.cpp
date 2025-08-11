@@ -225,7 +225,10 @@ void ESPGameAPI::parsePollResponse(const uint8_t* data, size_t len) {
     for (uint8_t i = 0; i < prodCount; i++) {
         ProductionCoefficient coeff;
         coeff.source_id = data[offset];
-        coeff.coefficient = static_cast<float>(networkToHostLong(*reinterpret_cast<const uint32_t*>(data + offset + 1))) / 1000.0f;
+        {
+            int32_t raw = static_cast<int32_t>(networkToHostLong(*reinterpret_cast<const uint32_t*>(data + offset + 1)));
+            coeff.coefficient = static_cast<float>(raw) / 1000.0f;
+        }
         productionCoefficients.push_back(coeff);
         offset += 5;
     }
@@ -243,7 +246,10 @@ void ESPGameAPI::parsePollResponse(const uint8_t* data, size_t len) {
     for (uint8_t i = 0; i < consCount; i++) {
         ConsumptionCoefficient coeff;
         coeff.building_id = data[offset];
-        coeff.consumption = static_cast<float>(networkToHostLong(*reinterpret_cast<const uint32_t*>(data + offset + 1))) / 1000.0f;
+        {
+            int32_t raw = static_cast<int32_t>(networkToHostLong(*reinterpret_cast<const uint32_t*>(data + offset + 1)));
+            coeff.consumption = static_cast<float>(raw) / 1000.0f;
+        }
         consumptionCoefficients.push_back(coeff);
         offset += 5;
     }
@@ -264,8 +270,12 @@ bool ESPGameAPI::parseProductionRanges(const uint8_t* data, size_t len) {
     for (uint8_t i = 0; i < count; i++) {
         ProductionRange range;
         range.source_id = data[offset];
-        range.min_power = static_cast<float>(networkToHostLong(*reinterpret_cast<const uint32_t*>(data + offset + 1))) / 1000.0f;
-        range.max_power = static_cast<float>(networkToHostLong(*reinterpret_cast<const uint32_t*>(data + offset + 5))) / 1000.0f;
+        {
+            int32_t rawMin = static_cast<int32_t>(networkToHostLong(*reinterpret_cast<const uint32_t*>(data + offset + 1)));
+            int32_t rawMax = static_cast<int32_t>(networkToHostLong(*reinterpret_cast<const uint32_t*>(data + offset + 5)));
+            range.min_power = static_cast<float>(rawMin) / 1000.0f;
+            range.max_power = static_cast<float>(rawMax) / 1000.0f;
+        }
         productionRanges.push_back(range);
         offset += 9;
     }
@@ -285,7 +295,8 @@ bool ESPGameAPI::parseConsumptionCoefficients(const uint8_t* data, size_t len) {
     for (uint8_t i = 0; i < count; i++) {
         ConsumptionCoefficient coeff;
         coeff.building_id = data[offset];
-        coeff.consumption = static_cast<float>(networkToHostLong(*reinterpret_cast<const uint32_t*>(data + offset + 1))) / 1000.0f;
+        int32_t raw = static_cast<int32_t>(networkToHostLong(*reinterpret_cast<const uint32_t*>(data + offset + 1)));
+        coeff.consumption = static_cast<float>(raw) / 1000.0f;
         consumptionCoefficients.push_back(coeff);
         offset += 5;
     }
