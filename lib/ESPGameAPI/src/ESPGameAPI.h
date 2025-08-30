@@ -41,10 +41,12 @@ struct ProductionRange        { uint8_t source_id;   float min_power; float max_
 struct ConsumptionCoefficient { uint8_t building_id; float consumption; };
 struct ConnectedPowerPlant    { uint32_t plant_id;   float set_power;   };
 struct ConnectedConsumer      { uint32_t consumer_id; };
+struct ConnectedBuilding      { String uid;          uint8_t building_type; };
 
 using PowerCallback       = std::function<float()>;
 using PowerPlantsCallback = std::function<std::vector<ConnectedPowerPlant>()>;
 using ConsumersCallback   = std::function<std::vector<ConnectedConsumer>()>;
+using BuildingsCallback   = std::function<void(const std::vector<ConnectedBuilding>&)>;
 
 // Async callback types for endpoints
 using AsyncCallback           = std::function<void(bool success, const std::string& error)>;
@@ -74,10 +76,12 @@ private:
     PowerCallback       consumptionCallback;
     PowerPlantsCallback powerPlantsCallback;
     ConsumersCallback   consumersCallback;
+    BuildingsCallback   buildingsCallback;
 
     std::vector<ProductionCoefficient>  productionCoefficients;
     std::vector<ProductionRange>        productionRanges;
     std::vector<ConsumptionCoefficient> consumptionCoefficients;
+    std::vector<ConnectedBuilding>      connectedBuildings;
     bool gameActive;
 
     volatile bool coeffsUpdated;                 // set from async callback
@@ -115,6 +119,12 @@ public:
     void setConsumptionCallback  (PowerCallback cb)       { consumptionCallback  = cb; }
     void setPowerPlantsCallback  (PowerPlantsCallback cb) { powerPlantsCallback  = cb; }
     void setConsumersCallback    (ConsumersCallback cb)   { consumersCallback    = cb; }
+    void setBuildingsCallback    (BuildingsCallback cb)   { buildingsCallback    = cb; }
+    
+    // Set connected buildings for sending with power data
+    void setConnectedBuildings(const std::vector<ConnectedBuilding>& buildings) {
+        connectedBuildings = buildings;
+    }
 
     // non‑blocking main loop helper
     bool update();     // call from loop()
@@ -124,6 +134,7 @@ public:
     void getProductionRanges(ProductionRangeCallback callback);
     void getConsumptionValues(ConsumptionValCallback callback);
     void submitPowerData(float production, float consumption, AsyncCallback callback = nullptr);
+    void submitPowerDataWithBuildings(float production, float consumption, const std::vector<ConnectedBuilding>& buildings, AsyncCallback callback = nullptr);
     void reportConnectedPowerPlants(const std::vector<ConnectedPowerPlant>&, AsyncCallback callback = nullptr);
     void reportConnectedConsumers(const std::vector<ConnectedConsumer>&, AsyncCallback callback = nullptr);
 

@@ -234,7 +234,7 @@ void ESPGameAPI::parsePollResponse(const uint8_t* data, size_t len) {
     uint8_t consCount = data[offset++];
     
     // Check if we have enough data for consumption coefficients
-    if (len < offset + consCount * 5) {
+    if (len < offset + consCount * 5 + 1) {
         Serial.println("❌ Malformed poll response - insufficient data for consumption coefficients");
         return;
     }
@@ -250,8 +250,39 @@ void ESPGameAPI::parsePollResponse(const uint8_t* data, size_t len) {
         offset += 5;
     }
     
+    // Parse connected buildings
+    uint8_t buildingsCount = data[offset++];
+    
+    std::vector<ConnectedBuilding> connectedBuildings;
+    for (uint8_t i = 0; i < buildingsCount; i++) {
+        if (offset + 1 > len) {
+            Serial.println("❌ Malformed poll response - insufficient data for building UID length");
+            return;
+        }
+        uint8_t uidLen = data[offset++];
+        
+        if (offset + uidLen + 1 > len) {
+            Serial.println("❌ Malformed poll response - insufficient data for building data");
+            return;
+        }
+        
+        ConnectedBuilding building;
+        String uid = "";
+        for (uint8_t j = 0; j < uidLen; j++) {
+            uid += (char)data[offset++];
+        }
+        building.uid = uid;
+        building.building_type = data[offset++];
+        connectedBuildings.push_back(building);
+    }
+    
     gameActive = true;
-    Serial.println("🎮 Game active - parsed " + String(prodCount) + " production and " + String(consCount) + " consumption coefficients");
+    Serial.println("🎮 Game active - parsed " + String(prodCount) + " production, " + String(consCount) + " consumption coefficients, and " + String(buildingsCount) + " connected buildings");
+    
+    // Call buildings callback if set
+    if (buildingsCallback && !connectedBuildings.empty()) {
+        buildingsCallback(connectedBuildings);
+    }
 }
 
 bool ESPGameAPI::parseProductionRanges(const uint8_t* data, size_t len) {
@@ -368,6 +399,66 @@ void ESPGameAPI::submitPowerData(float production, float consumption, AsyncCallb
                 if (callback) callback(true, "");
             } else {
                 Serial.println("❌ Submit power data HTTP error: " + String(status));
+                if (callback) callback(false, "HTTP error: " + std::to_string(status));
+            }
+        });
+}
+
+void ESPGameAPI::submitPowerDataWithBuildings(float production, float consumption, const std::vector<ConnectedBuilding>& buildings, AsyncCallback callback) {
+    if (!isRegistered) {
+        if (callback) callback(false, "Board not registered");
+        return;
+    }
+    
+    std::vector<uint8_t> data(sizeof(PowerDataRequest));
+    PowerDataRequest* request = reinterpret_cast<PowerDataRequest*>(&data[0]);
+    request->production = hostToNetworkLong(static_cast<int32_t>(production * 1000));
+    request->consumption = hostToNetworkLong(static_cast<int32_t>(consumption * 1000));
+    
+    // Add buildings count
+    data.push_back(static_cast<uint8_t>(buildings.size()));
+    
+    // Add buildings
+    for (const auto& building : buildings) {
+        String uid = building.uid;
+        uint8_t building_type = building.building_type;
+        std::string uid_str = std::string(uid.c_str());
+        uint8_t uid_len = uid_str.length();
+        if (uid_len > 255) uid_len = 255;
+        
+        data.push_back(uid_len);
+        for (uint8_t i = 0; i < uid_len; i++) {
+            data.push_back(uid_str[i]);
+        }
+        data.push_back(building_type);
+    }
+    
+    std::string payload(reinterpret_cast<const char*>(data.data()), data.size());
+    
+    requestPostInFlight = true;
+    
+    AsyncRequest::fetch(
+        AsyncRequest::Method::POST,
+        std::string((baseUrl + "/coreapi/post_vals").c_str()),
+        payload,
+        { 
+            { "Authorization", "Bearer " + std::string(token.c_str()) },
+            { "Content-Type", "application/octet-stream" }
+        },
+        [this, callback](esp_err_t err, int status, std::string body) {
+            requestPostInFlight = false;
+            
+            if (err != ESP_OK) {
+                Serial.println("❌ Submit power data with buildings failed: " + String(esp_err_to_name(err)));
+                if (callback) callback(false, "Network error: " + std::string(esp_err_to_name(err)));
+                return;
+            }
+            
+            if (status == 200) {
+                Serial.println("✅ Power data with buildings submitted successfully");
+                if (callback) callback(true, "");
+            } else {
+                Serial.println("❌ Submit power data with buildings HTTP error: " + String(status));
                 if (callback) callback(false, "HTTP error: " + std::to_string(status));
             }
         });
@@ -555,7 +646,11 @@ bool ESPGameAPI::update(){
 
         // Submit power data if both callbacks are set
         if(productionCallback && consumptionCallback) {
-            submitPowerData(productionCallback(), consumptionCallback());
+            if (!connectedBuildings.empty()) {
+                submitPowerDataWithBuildings(productionCallback(), consumptionCallback(), connectedBuildings);
+            } else {
+                submitPowerData(productionCallback(), consumptionCallback());
+            }
         }
     }
 
