@@ -2,10 +2,16 @@
 #include "AsyncRequest.hpp"
 #include <ArduinoJson.h>
 
-// Forward declaration for embedded certificate bundle
-extern "C" {
-    extern const uint8_t x509_crt_bundle_start[] asm("_binary_cert_x509_crt_bundle_bin_start");
-}
+// NOTE: Previously a custom embedded certificate bundle was used via
+// arduino_esp_crt_bundle_set(x509_crt_bundle_start). That bundle was in an
+// invalid format for the Arduino / ESP-IDF crt bundle loader which resulted in:
+//   arduino_esp_crt_bundle_attach(): Failed to attach bundle
+//   mbedtls_ssl_handshake returned -0x7680
+// This prevented HTTPS connections (ESP_ERR_HTTP_CONNECT). We now rely on the
+// built-in Arduino root certificate bundle which already contains common CAs
+// (e.g. Let's Encrypt). If a custom trust store is ever required, ensure it is
+// generated with the official bundle generation script so its format matches
+// expectations before calling arduino_esp_crt_bundle_set.
 
 // ───────────────────────────────────────────── Dummy serial (see header)
 #ifndef ESPGAMEAPI_ENABLE_SERIAL
@@ -47,8 +53,9 @@ String ESPGameAPI::boardTypeToString(BoardType t) const {
 
 // ───────────────────────────────────────────── Certificate bundle initialization
 void ESPGameAPI::initCertificateBundle() {
-    arduino_esp_crt_bundle_set(x509_crt_bundle_start);
-    Serial.println("🔒 Certificate bundle initialized");
+    // Intentionally left minimal: using the built-in global certificate bundle.
+    // Just log once so users know HTTPS root CAs are available.
+    Serial.println("🔒 Using built-in certificate bundle");
 }
 
 // ───────────────────────────────────────────── login / register (unchanged)
