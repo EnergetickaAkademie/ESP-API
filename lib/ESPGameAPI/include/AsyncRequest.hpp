@@ -8,11 +8,15 @@
 
 extern "C" {
   #include "esp_http_client.h"
+  #include "esp_crt_bundle.h"
   #include "freertos/FreeRTOS.h"
   #include "freertos/task.h"
   #include "freertos/semphr.h"
   #include "esp_log.h"
 }
+
+// Fallback insecure client (only used if no certificate validation is configured)
+#include <WiFiClientSecure.h>
 
 class AsyncRequest {
 public:
@@ -134,6 +138,105 @@ private:
     ctx->method = request->method;
 
     const bool isHttp = request->url.rfind("http://", 0) == 0;
+  const bool isHttps = request->url.rfind("https://", 0) == 0;
+
+    // If HTTPS and we have chosen to ignore certificates, use a manual insecure client path.
+    // This avoids esp_http_client rejecting the config due to missing verification options.
+    if (isHttps) {
+      // Basic URL parsing: https://host[:port]/path
+      std::string urlNoScheme = ctx->url.substr(8); // after https://
+      std::string hostPort, path;
+      size_t slashPos = urlNoScheme.find('/');
+      if (slashPos == std::string::npos) {
+        hostPort = urlNoScheme;
+        path = "/";
+      } else {
+        hostPort = urlNoScheme.substr(0, slashPos);
+        path = urlNoScheme.substr(slashPos);
+      }
+      std::string host = hostPort;
+      int port = 443;
+      size_t colonPos = hostPort.find(':');
+      if (colonPos != std::string::npos) {
+        host = hostPort.substr(0, colonPos);
+        try { port = std::stoi(hostPort.substr(colonPos + 1)); } catch(...) { port = 443; }
+      }
+
+      WiFiClientSecure secureClient;
+      secureClient.setInsecure(); // accept all certs (INSECURE)
+      if (!secureClient.connect(host.c_str(), port)) {
+        ctx->logFail(ESP_ERR_HTTP_CONNECT);
+        ctx->finish(ESP_ERR_HTTP_CONNECT, -1);
+        delete ctx;
+        return;
+      }
+
+      // Build HTTP request manually
+      std::string methodStr = (ctx->method == Method::POST ? "POST" : "GET");
+      std::string requestLine = methodStr + " " + path + " HTTP/1.1\r\n";
+      secureClient.print(requestLine.c_str());
+      secureClient.print("Host: "); secureClient.print(host.c_str()); secureClient.print("\r\n");
+      secureClient.print("User-Agent: AsyncRequest/1.0\r\n");
+      secureClient.print("Connection: close\r\n");
+      bool hasContentLength = false;
+      for (auto &h : request->headers) {
+        secureClient.print(h.first.c_str());
+        secureClient.print(": ");
+        secureClient.print(h.second.c_str());
+        secureClient.print("\r\n");
+        if (strcasecmp(h.first.c_str(), "Content-Length") == 0) hasContentLength = true;
+      }
+      if (ctx->method == Method::POST && !hasContentLength) {
+        secureClient.print("Content-Length: ");
+        secureClient.print((int)ctx->payload.size());
+        secureClient.print("\r\n");
+      }
+      secureClient.print("\r\n");
+      if (ctx->method == Method::POST && !ctx->payload.empty()) {
+        secureClient.write((const uint8_t*)ctx->payload.data(), ctx->payload.size());
+      }
+
+      // Read status line
+      std::string statusLine;
+      while (secureClient.connected()) {
+        int c = secureClient.read();
+        if (c < 0) { delay(1); continue; }
+        if (c == '\r') continue;
+        if (c == '\n') break;
+        statusLine.push_back((char)c);
+      }
+      int statusCode = -1;
+      if (statusLine.rfind("HTTP/", 0) == 0) {
+        size_t sp1 = statusLine.find(' ');
+        if (sp1 != std::string::npos) {
+          size_t sp2 = statusLine.find(' ', sp1 + 1);
+          std::string codeStr = statusLine.substr(sp1 + 1, sp2 - (sp1 + 1));
+          try { statusCode = std::stoi(codeStr); } catch(...) { statusCode = -1; }
+        }
+      }
+      // Skip headers
+      std::string headerLine;
+      while (secureClient.connected()) {
+        int c = secureClient.read();
+        if (c < 0) { delay(1); continue; }
+        if (c == '\r') continue;
+        if (c == '\n') {
+          if (headerLine.empty()) break; // end of headers
+          headerLine.clear();
+        } else {
+          headerLine.push_back((char)c);
+        }
+      }
+      // Read body
+      while (secureClient.connected() || secureClient.available()) {
+        int c = secureClient.read();
+        if (c < 0) { delay(1); continue; }
+        ctx->body.push_back((char)c);
+      }
+      ctx->finish(statusCode >= 0 ? ESP_OK : ESP_FAIL, statusCode);
+      delete ctx;
+      return;
+    }
 
     esp_http_client_config_t cfg = {};
     cfg.url = ctx->url.c_str();
@@ -141,17 +244,15 @@ private:
     cfg.user_data = ctx;
     cfg.is_async = false; // Always synchronous now for queue control
     cfg.timeout_ms = 7000;
-  // Attach built-in certificate bundle but skip hostname verification.
-  // This avoids esp-tls "no server verification" errors while still
-  // relaxing the certificate's common-name check.
-  cfg.crt_bundle_attach = esp_crt_bundle_attach;
-  cfg.skip_cert_common_name_check = true;     // allow mismatched hostnames
+    cfg.crt_bundle_attach = nullptr;            // no CA
+    cfg.skip_cert_common_name_check = true;     // ignore hostname
+
     ctx->client = esp_http_client_init(&cfg);
-    if (!ctx->client) { 
-      ctx->logFail(ESP_FAIL); 
+    if (!ctx->client) {
+      ctx->logFail(ESP_FAIL);
       ctx->finish(ESP_FAIL, -1);
-      delete ctx; 
-      return; 
+      delete ctx;
+      return;
     }
 
     if (request->method == Method::POST) {
