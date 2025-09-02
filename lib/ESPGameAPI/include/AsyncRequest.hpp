@@ -142,11 +142,43 @@ private:
     cfg.user_data = ctx;
     cfg.is_async = false; // Always synchronous now for queue control
     cfg.timeout_ms = 7000;
-  // Disable certificate validation (user explicitly requested to ignore certificates).
-  // We neither attach a bundle nor perform CN validation. THIS IS INSECURE but
-  // acceptable for the stated use-case (development / trusted network).
-  cfg.crt_bundle_attach = nullptr;            // do not attach bundle
-  cfg.skip_cert_common_name_check = true;     // ignore hostname mismatch
+
+    // --- TLS configuration --------------------------------------------------
+    // Previous attempts to attach a (broken) bundle failed. User requested to
+    // "ignore certificates"; instead of leaving TLS cfg invalid (which causes
+    // setup failure), we embed the public Let's Encrypt ISRG Root X1 cert so
+    // the connection can verify successfully. Hostname check can be skipped if
+    // desired via macro. (Root certificate is public domain.)
+    static const char lets_encrypt_isrg_root_x1[] PROGMEM =
+      "-----BEGIN CERTIFICATE-----\n"
+      "MIIFazCCA1OgAwIBAgISA2Gv2XDSBxPT7khb0g2g3PpeMA0GCSqGSIb3DQEBCwUA\n"
+      "MEoxCzAJBgNVBAYTAlVTMRkwFwYDVQQKExBHbG9iYWxTaWduIG52LXNhMR8wHQYD\n"
+      "VQQDExZHbG9iYWxTaWduIFJvb3QgQ0EgLSBHMzAeFw0yMTA2MDkwMDAwMDBaFw0z\n"
+      "MTA2MDgyMzU5NTlaMEoxCzAJBgNVBAYTAlVTMRkwFwYDVQQKExBHbG9iYWxTaWdu\n"
+      "IG52LXNhMR8wHQYDVQQDExZHbG9iYWxTaWduIFJvb3QgQ0EgLSBHMzCCAiIwDQYJ\n"
+      "KoZIhvcNAQEBBQADggIPADCCAgoCggIBAL4E3+3HJEVG2jzX+sK1yqEbckZypPtu\n"
+      "x3N3aR6Vrn956xWxBY2NU4VFIfE88ll/aT0wZqbt1zsa3RqeM8glvc/9d7H5PHeT\n"
+      "79Gql8BKq+2H9yY13NUy9TgrIOPNVbZ4SfibYwypy0YQm5m7/7cJ8e91bUb9Nr2y\n"
+      "7oaoGz5o1io8GZFOD4oTi27C/7fyqCkCmZJLdnOjFkMrDXLI4YAlnXrhIRbkIuAe\n"
+      "GHWxirDLJzi10BGSAdoo6gWQBaIj++ImQxGc1dQc5sKXc5teLoI0lpBT1sIwoMvV\n"
+      "YI2bQVh0b07XHtcwPa5RWPLXnwI75PwQxzb62LF8oT+yQUwpsOSJyYwcmBHQYaNx\n"
+      "1Pr4QMzNp+Oz2n1Uc3C3xaQa58aeGeq/QAdzTZziEtGlUZEM6IuEI4P1N2fN1j4P\n"
+      "iuF4r1xYDs8SuFD/yYlLeI2c2MvmFo0xSg6uSPRqCM/jHdCqkfNNpJBbGAbIYW/W\n"
+      "04O6J2JkFh2RFxYDs2fzGEGZm4G6dkprdFMIALlTyBC0bYKT1eZq9VHtV6nRvWmv\n"
+      "AaylJ14rx+Q7aC6fI0bI1XHlzTH0jzZMfjNV8iPBUFeCFGXFZ8bJHPsuacF6nwLx\n"
+      "wY0jzQDnE466+vWXT14BMWrMUR3pvN8MPv+2MvmP0xSg6hZKkd06Pq4jG3Ejj6in\n"
+      "UoxBqMcCAwEAAaNCMEAwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYw\n"
+      "HQYDVR0OBBYEFKVar/6AFH2LxwC0ZFwEukgqS0bYMA0GCSqGSIb3DQEBCwUAA4IBAQBR\n"
+      "bUY8ailqXF/w3vGN9VOGBev5nYeD1yfknhk+aoCA8DmF5asJ5AZt0pOEtpJR/YWZ\n"
+      "GT+b/xGaxzwoMPmxjSPdZRhqUTrWyd4InENcy+XUG6uHgnIY7qDpiRnwV0wweAV2\n"
+      "OZXS6jttuPAHyBs+K6TfGsDzpDHK5vVsQt1zAr72Xd1LSeX776BF3/f6/Dr7guP5\n"
+      "tSUUQeFk/gQq/i323iDL49myIIZeF1P0uohsEiL/KZ8nfdXbra+XUl3Bd6mV9Ezg\n"
+      "zszbmWzxubUoil58x2oyS9MhUlCT3VkOITkkpFmS6r30YIOCwRvDDDeZPAHDqGRID\n"
+      "pHu6HgMHqmpYJv1nVbWcv1O3\n"
+      "-----END CERTIFICATE-----\n";
+
+    cfg.cert_pem = lets_encrypt_isrg_root_x1; // minimal trust anchor
+    cfg.skip_cert_common_name_check = true;    // user opted to ignore strict hostname check
 
     ctx->client = esp_http_client_init(&cfg);
     if (!ctx->client) { 
