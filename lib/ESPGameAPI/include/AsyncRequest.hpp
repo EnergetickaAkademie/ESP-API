@@ -142,7 +142,11 @@ private:
     cfg.user_data = ctx;
     cfg.is_async = false; // Always synchronous now for queue control
     cfg.timeout_ms = 7000;
-    cfg.crt_bundle_attach = arduino_esp_crt_bundle_attach;
+  // Disable certificate validation (user explicitly requested to ignore certificates).
+  // We neither attach a bundle nor perform CN validation. THIS IS INSECURE but
+  // acceptable for the stated use-case (development / trusted network).
+  cfg.crt_bundle_attach = nullptr;            // do not attach bundle
+  cfg.skip_cert_common_name_check = true;     // ignore hostname mismatch
 
     ctx->client = esp_http_client_init(&cfg);
     if (!ctx->client) { 
