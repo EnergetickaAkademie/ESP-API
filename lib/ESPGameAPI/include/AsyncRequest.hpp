@@ -5,6 +5,7 @@
 #include <functional>
 #include <queue>
 #include <memory>
+#include <Arduino.h>  // Ensure Arduino core types (IPAddress) defined before lwIP macros
 
 extern "C" {
   #include "esp_http_client.h"
@@ -14,6 +15,14 @@ extern "C" {
   #include "freertos/semphr.h"
   #include "esp_log.h"
 }
+
+// lwIP defines INADDR_NONE as a macro which collides with Arduino's extern variable
+#ifdef INADDR_NONE
+#undef INADDR_NONE
+#endif
+
+#include <WiFiClientSecure.h>
+#include <strings.h> // for strcasecmp
 
 // Fallback insecure client (only used if no certificate validation is configured)
 #include <WiFiClientSecure.h>
