@@ -141,14 +141,11 @@ private:
     cfg.user_data = ctx;
     cfg.is_async = false; // Always synchronous now for queue control
     cfg.timeout_ms = 7000;
-
-  // --- TLS configuration --------------------------------------------------
-  // No CA certificate is supplied which disables server verification.
-  // This allows HTTPS connections without validating the peer's identity.
-  cfg.cert_pem = nullptr;                     // insecure: accept any cert
-  cfg.use_global_ca_store = false;            // do not use built-in store
-  cfg.skip_cert_common_name_check = true;     // also skip hostname check
-
+  // Attach built-in certificate bundle but skip hostname verification.
+  // This avoids esp-tls "no server verification" errors while still
+  // relaxing the certificate's common-name check.
+  cfg.crt_bundle_attach = esp_crt_bundle_attach;
+  cfg.skip_cert_common_name_check = true;     // allow mismatched hostnames
     ctx->client = esp_http_client_init(&cfg);
     if (!ctx->client) { 
       ctx->logFail(ESP_FAIL); 
