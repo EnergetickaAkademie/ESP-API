@@ -54,8 +54,20 @@ public:
       if (cb) cb(ESP_FAIL,-1,"no_queue");
       return;
     }
+    
+    // Debug: Log request details and queue status
+    UBaseType_t queueWaiting = uxQueueMessagesWaiting(queue_);
+    UBaseType_t queueSpaces = uxQueueSpacesAvailable(queue_);
+    Serial.printf("[AsyncRequest] 📤 %s %s (Queue: %u/%u)\n", 
+        method == Method::GET ? "GET" : "POST", 
+        url.c_str(), 
+        queueWaiting, 
+        queueWaiting + queueSpaces);
+    
     Request *r = new Request{method,url,std::move(payload),headers,cb};
     if (xQueueSend(queue_, &r, 0) != pdTRUE) {
+      Serial.printf("[AsyncRequest] ❌ Queue full! Dropping %s %s\n", 
+          method == Method::GET ? "GET" : "POST", url.c_str());
       if (cb) cb(ESP_FAIL,-1,"queue_full");
       delete r;
     }
@@ -97,11 +109,15 @@ private:
   }
 
   static void execute_(Request *req) {
+    uint32_t startTime = millis();
     esp_err_t err = ESP_OK;
     int status = -1;
     std::string body;
 
     bool https = req->url.rfind("https://",0)==0;
+    Serial.printf("[AsyncRequest] ⚡ Processing %s %s\n", 
+        req->method == Method::GET ? "GET" : "POST", req->url.c_str());
+    
     if (https) {
       WiFiClientSecure cli;
       if (insecureTLS_) cli.setInsecure();
@@ -116,6 +132,12 @@ private:
       sendAndRead_(http, req, status, body, err);
       http.end();
     }
+    
+    uint32_t duration = millis() - startTime;
+    Serial.printf("[AsyncRequest] ✅ Completed %s %s in %lu ms (status: %d, body: %u bytes)\n", 
+        req->method == Method::GET ? "GET" : "POST", req->url.c_str(), 
+        duration, status, body.length());
+    
     finish_(req, err, status, body);
   }
 
