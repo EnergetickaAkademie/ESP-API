@@ -55,7 +55,7 @@ String ESPGameAPI::boardTypeToString(BoardType t) const {
 void ESPGameAPI::initCertificateBundle() {
     // Initialize AsyncRequest backend with configurable worker count
     // Default: 1 worker for thread safety, can be increased if needed
-    if (!AsyncRequest::begin(1, 8, 8192, 1, 1)) {
+    if (!AsyncRequest::begin(3, 8, 8192, 1, 1)) {
         Serial.println("⚠️ Failed to initialize AsyncRequest workers");
     } else {
         Serial.println("🔒 AsyncRequest initialized with HTTPClient backend");
