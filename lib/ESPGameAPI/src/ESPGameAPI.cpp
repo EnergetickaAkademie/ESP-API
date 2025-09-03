@@ -28,7 +28,7 @@ ESPGameAPI::ESPGameAPI(const String& url, const String& name, BoardType type,
       updateInterval(upd), pollInterval(poll),
       gameActive(false),
       coeffsUpdated(false),
-      requestPollInFlight(false), requestPostInFlight(false) {}
+      requestPollInFlight(false), requestPostInFlight(false), requestRangesInFlight(false) {}
 
 // ───────────────────────────────────────────── byte‑order helpers (unchanged)
 uint32_t ESPGameAPI::hostToNetworkLong(uint32_t v) {
@@ -566,12 +566,21 @@ void ESPGameAPI::getProductionRanges(ProductionRangeCallback callback) {
         return;
     }
     
+    if (requestRangesInFlight) {
+        if (callback) callback(false, {}, "Request already in progress");
+        return;
+    }
+    
+    requestRangesInFlight = true;
+    
     AsyncRequest::fetch(
         AsyncRequest::Method::GET,
         std::string((baseUrl + "/coreapi/prod_vals").c_str()),
         "",
         { { "Authorization", "Bearer " + std::string(token.c_str()) } },
         [this, callback](esp_err_t err, int status, std::string body) {
+            requestRangesInFlight = false;
+            
             if (err != ESP_OK) {
                 Serial.println("❌ Get production ranges failed: " + String(esp_err_to_name(err)));
                 if (callback) callback(false, {}, "Network error: " + std::string(esp_err_to_name(err)));

@@ -86,6 +86,7 @@ private:
 
     volatile bool coeffsUpdated;                 // set from async callback
     bool requestPollInFlight, requestPostInFlight;
+    bool requestRangesInFlight;  // Add tracking for production ranges requests
 
     // ---------- helpers ----------
     uint32_t hostToNetworkLong     (uint32_t);
