@@ -53,9 +53,13 @@ String ESPGameAPI::boardTypeToString(BoardType t) const {
 
 // ───────────────────────────────────────────── Certificate bundle initialization
 void ESPGameAPI::initCertificateBundle() {
-    // Intentionally left minimal: using the built-in global certificate bundle.
-    // Just log once so users know HTTPS root CAs are available.
-    Serial.println("🔒 Using built-in certificate bundle");
+    // Initialize AsyncRequest backend with configurable worker count
+    // Default: 1 worker for thread safety, can be increased if needed
+    if (!AsyncRequest::begin(1, 8, 8192, 1, 1)) {
+        Serial.println("⚠️ Failed to initialize AsyncRequest workers");
+    } else {
+        Serial.println("🔒 AsyncRequest initialized with HTTPClient backend");
+    }
 }
 
 // ───────────────────────────────────────────── login / register (unchanged)
