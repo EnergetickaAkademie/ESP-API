@@ -38,6 +38,12 @@ public:
     insecureTLS_ = allowInsecureTLS;
   }
 
+  // Backwards compatibility wrapper (legacy signature). Ignores most params now.
+  static bool begin(uint8_t maxWorkers, uint8_t /*queueLenIgnored*/, uint32_t /*stackIgnored*/, UBaseType_t /*prioIgnored*/, BaseType_t /*coreIgnored*/) {
+    configure(maxWorkers, true);
+    return true; // always succeeds with current lightweight implementation
+  }
+
   static void fetch(Method method,
                     const std::string &url,
                     std::string payload,
