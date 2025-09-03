@@ -226,21 +226,23 @@ private:
         } else {
           err = ESP_FAIL;
         }
-        uint32_t t3 = millis();
-        ctx.http.end(); // will keep socket if reuse & server allowed keep-alive
-        if (ASYNCREQUEST_DEBUG) {
-          AR_LOGf("[AsyncRequest] done %s %s qDelay=%lums connect=%lums body=%lums total=%lums status=%d size=%u active=%u\n",
-                  req->method==Method::GET?"GET":"POST", req->url.c_str(),
-                  (unsigned long)(t_start - req->t_enq),
-                  (unsigned long)(t2 - t1),
-                  (unsigned long)(t3 - t2),
-                  (unsigned long)(t3 - t_start),
-                  status, (unsigned)body.size(), (unsigned)activeWorkers_);
-        }
+  uint32_t t3 = millis();
+  ctx.http.end(); // will keep socket if reuse & server allowed keep-alive
+  if (ASYNCREQUEST_DEBUG) {
+    AR_LOGf("[TIMING] method=%s url=%s | inQ=%lums | conn+tls+hdr=%lums | body=%lums | total=%lums | status=%d | bodyB=%u | active=%u\n",
+      req->method==Method::GET?"GET":"POST", req->url.c_str(),
+      (unsigned long)(t_start - req->t_enq),
+      (unsigned long)(t2 - t1),
+      (unsigned long)(t3 - t2),
+      (unsigned long)(t3 - t_start),
+      status, (unsigned)body.size(), (unsigned)activeWorkers_);
+  }
       } else {
         err = ESP_FAIL; uint32_t t3=millis();
         if (ASYNCREQUEST_DEBUG) {
-          AR_LOGf("[AsyncRequest] beginFail %s qDelay=%lums total=%lums\n", req->url.c_str(), (unsigned long)(t_start-req->t_enq), (unsigned long)(t3-t_start));
+    AR_LOGf("[TIMING] method=%s url=%s | inQ=%lums | beginFail | total=%lums | active=%u\n",
+      req->method==Method::GET?"GET":"POST", req->url.c_str(),
+      (unsigned long)(t_start-req->t_enq), (unsigned long)(t3-t_start), (unsigned)activeWorkers_);
         }
       }
       finish_(req, err, status, body);
