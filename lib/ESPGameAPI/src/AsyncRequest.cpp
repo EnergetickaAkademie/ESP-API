@@ -1,7 +1,7 @@
 #include "AsyncRequest.hpp"
 
-// Static variable definitions for AsyncRequest
-std::queue<AsyncRequest::RequestItem*> AsyncRequest::requestQueue;
-SemaphoreHandle_t AsyncRequest::queueMutex = nullptr;
-bool AsyncRequest::isProcessing = false;
-TaskHandle_t AsyncRequest::queueProcessorTask = nullptr;
+// Static storage definitions for new AsyncRequest implementation
+QueueHandle_t AsyncRequest::queue_ = NULL;
+bool AsyncRequest::started_ = false;
+uint8_t AsyncRequest::maxWorkers_ = 1;
+bool AsyncRequest::insecureTLS_ = true;
