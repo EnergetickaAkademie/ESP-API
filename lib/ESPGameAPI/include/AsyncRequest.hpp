@@ -22,13 +22,13 @@
 #define ASYNCREQUEST_WORKER_STACK 6144
 #endif
 #ifndef ASYNCREQUEST_IDLE_TIMEOUT_MS
-#define ASYNCREQUEST_IDLE_TIMEOUT_MS 10000   // increased from 1500ms -> ~10s
+#define ASYNCREQUEST_IDLE_TIMEOUT_MS 15000   // increased from 1500ms -> ~10s
 #endif
 #ifndef ASYNCREQUEST_BODY_CAP_BYTES
 #define ASYNCREQUEST_BODY_CAP_BYTES 65536
 #endif
 #ifndef ASYNCREQUEST_CONNECT_TIMEOUT_MS
-#define ASYNCREQUEST_CONNECT_TIMEOUT_MS 10000 // increased from 1500ms -> ~10s
+#define ASYNCREQUEST_CONNECT_TIMEOUT_MS 15000 // increased from 1500ms -> ~10s
 #endif
 #ifndef ASYNCREQUEST_FORCE_CLOSE
 #define ASYNCREQUEST_FORCE_CLOSE 0   // 1 = disable keep-alive reuse
@@ -184,7 +184,7 @@ private:
         ctx.http.addHeader("Connection","close");
   #endif
   ctx.http.setConnectTimeout(ASYNCREQUEST_CONNECT_TIMEOUT_MS);
-  ctx.http.setTimeout(10000); // was 7000ms, align with ~10s request
+  ctx.http.setTimeout(ASYNCREQUEST_IDLE_TIMEOUT_MS); // was 7000ms, align with ~10s request
         if (ctx.origin.https && ctx.secure) began = ctx.http.begin(*ctx.secure, req->url.c_str());
         else if (!ctx.origin.https && ctx.plain) began = ctx.http.begin(*ctx.plain, req->url.c_str());
       }
