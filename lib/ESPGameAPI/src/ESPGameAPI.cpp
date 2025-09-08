@@ -374,47 +374,6 @@ void ESPGameAPI::pollCoefficients(CoefficientsCallback callback) {
         });
 }
 
-void ESPGameAPI::submitPowerData(float production, float consumption, AsyncCallback callback) {
-    if (!isRegistered) {
-        if (callback) callback(false, "Board not registered");
-        return;
-    }
-    
-    PowerDataRequest request;
-    request.production = hostToNetworkLong(static_cast<int32_t>(production * 1000));
-    request.consumption = hostToNetworkLong(static_cast<int32_t>(consumption * 1000));
-    
-    requestPostInFlight = true;
-    
-    std::string payload(reinterpret_cast<const char*>(&request), sizeof(request));
-    
-    AsyncRequest::fetch(
-        AsyncRequest::Method::POST,
-        std::string((baseUrl + "/coreapi/post_vals").c_str()),
-        payload,
-        { 
-            { "Authorization", "Bearer " + std::string(token.c_str()) },
-            { "Content-Type", "application/octet-stream" }
-        },
-        [this, callback](esp_err_t err, int status, std::string body) {
-            requestPostInFlight = false;
-            
-            if (err != ESP_OK) {
-                Serial.println("❌ Submit power data failed: " + String(esp_err_to_name(err)));
-                if (callback) callback(false, "Network error: " + std::string(esp_err_to_name(err)));
-                return;
-            }
-            
-            if (status == 200) {
-                Serial.println("✅ Power data submitted successfully");
-                if (callback) callback(true, "");
-            } else {
-                Serial.println("❌ Submit power data HTTP error: " + String(status));
-                if (callback) callback(false, "HTTP error: " + std::to_string(status));
-            }
-        });
-}
-
 void ESPGameAPI::submitPowerDataWithBuildings(float production, float consumption, const std::vector<ConnectedBuilding>& buildings, AsyncCallback callback) {
     if (!isRegistered) {
         if (callback) callback(false, "Board not registered");
@@ -666,11 +625,8 @@ bool ESPGameAPI::update(){
 
         // Submit power data if both callbacks are set
         if(productionCallback && consumptionCallback) {
-            if (!connectedBuildings.empty()) {
-                submitPowerDataWithBuildings(productionCallback(), consumptionCallback(), connectedBuildings);
-            } else {
-                submitPowerData(productionCallback(), consumptionCallback());
-            }
+            // Always use the new format with buildings to ensure proper clearing behavior
+            submitPowerDataWithBuildings(productionCallback(), consumptionCallback(), connectedBuildings);
         }
     }
 

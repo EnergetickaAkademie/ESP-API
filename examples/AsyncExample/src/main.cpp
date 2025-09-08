@@ -147,7 +147,7 @@ void loop() {
         Serial.println("🔧 Performing manual operations...");
         
         // Manual power data submission with callback
-        api.submitPowerData(getProductionPower(), getConsumptionPower(), [](bool success, const std::string& error) {
+        api.submitPowerDataWithBuildings(getProductionPower(), getConsumptionPower(), {}, [](bool success, const std::string& error) {
             if (success) {
                 Serial.println("✅ Manual power data submitted!");
             } else {

@@ -134,7 +134,6 @@ public:
     void pollCoefficients(CoefficientsCallback callback = nullptr);
     void getProductionRanges(ProductionRangeCallback callback);
     void getConsumptionValues(ConsumptionValCallback callback);
-    void submitPowerData(float production, float consumption, AsyncCallback callback = nullptr);
     void submitPowerDataWithBuildings(float production, float consumption, const std::vector<ConnectedBuilding>& buildings, AsyncCallback callback = nullptr);
     void reportConnectedPowerPlants(const std::vector<ConnectedPowerPlant>&, AsyncCallback callback = nullptr);
     void reportConnectedConsumers(const std::vector<ConnectedConsumer>&, AsyncCallback callback = nullptr);
